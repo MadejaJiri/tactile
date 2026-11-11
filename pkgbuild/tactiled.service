@@ -1,7 +1,6 @@
 [Unit]
 Description=Tactile: trackpad click settings
 Documentation=https://github.com/MadejaJiri/tactile
-Wants=tactile-actuator.service
 After=tactile-actuator.service
 
 [Service]

@@ -127,12 +127,12 @@ elif [ "$PROBLEMS" = 0 ]; then
 fi
 
 # 5. The actuator, the part that makes the click. Some boots miss it; the
-#    service's start has just looked for it again.
+#    click is the firmware's until the controller is probed again.
 if [ -d /sys/bus/spi/drivers/spi-hid-apple-of ]; then
 	if ls /sys/bus/hid/drivers/hid-apple-mtp-haptic 2>/dev/null | grep -q -E '^[0-9A-F]{4}:'; then
 		ok "the trackpad's actuator is there"
 	else
-		bad "the trackpad's actuator is missing, so the firmware plays the click: sudo tactile-driver repair"
+		echo "  ..   the trackpad's actuator was not found at this boot, so the firmware plays the click (tactile-driver help)"
 	fi
 fi
 

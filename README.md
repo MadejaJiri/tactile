@@ -111,8 +111,14 @@ sudo tactile-driver repair     # find the actuator again if a boot missed it
 On the machine above, about every other boot the trackpad's controller does not
 list the actuator, the part that makes the click, with or without Tactile.
 The firmware still clicks then, but the driver has nothing to play its own
-click with. Probing the controller again brings the actuator back, so Tactile
-checks once at every boot and does that if needed (`tactile-actuator.service`).
+click with. The cause is in the kernel's SPI transport, which asks for each
+device's description once and does not ask again when the answer is lost.
+
+Probing the controller again (`repair`) brings the actuator back, at the price
+of a two-second pause of keyboard and trackpad. It is not run automatically:
+one such probe out of nine froze the whole machine for four minutes, for a
+reason not yet found. `sudo systemctl enable tactile-actuator.service` runs it
+at every boot that needs it, if you accept that.
 
 Switching drivers by hand pauses the keyboard and the trackpad for about two
 seconds, because both sit behind the same controller.

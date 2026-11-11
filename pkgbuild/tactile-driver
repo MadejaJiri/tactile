@@ -9,7 +9,8 @@
 # The actuator is the part under the trackpad that makes the click. On some
 # boots the controller does not list it, and then only the trackpad's firmware
 # can play the click. Probing the controller again brings it back; `repair`
-# does that, and Tactile runs it once at every boot.
+# does that. It pauses keyboard and trackpad for two seconds, and it once
+# froze the whole machine for four minutes instead, so save your work first.
 #
 # A reboot does the same as `reload`: Tactile's driver is the one the system
 # loads once DKMS has built it. Switching by hand pauses the keyboard and the
@@ -93,7 +94,7 @@ status() {
 	none) echo "running    hid-magicmouse is not loaded" ;;
 	esac
 	if [ -n "$(spi_device)" ] && ! has_actuator; then
-		echo "actuator   not found at this boot, so the firmware plays the click: sudo tactile-driver repair"
+		echo "actuator   not found at this boot, so the firmware plays the click (see: tactile-driver help)"
 	fi
 	if command -v dkms >/dev/null 2>&1; then
 		echo "dkms       $(dkms status tactile 2>/dev/null | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
@@ -242,7 +243,7 @@ status) status ;;
 reload) reload ;;
 stock) stock ;;
 repair) repair ;;
--h | --help | help) sed -n '2,17s/^# \{0,1\}//p' "$0" ;;
+-h | --help | help) sed -n '2,18s/^# \{0,1\}//p' "$0" ;;
 *)
 	echo "tactile-driver: unknown command \"$1\" (status, reload, stock, repair)" >&2
 	exit 1

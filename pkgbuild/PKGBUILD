@@ -2,7 +2,7 @@
 
 pkgname=tactile
 pkgver=0.1.0
-pkgrel=2
+pkgrel=3
 pkgdesc="A light, tunable trackpad click with haptic feedback for Apple Silicon MacBooks: driver, service, and settings app"
 arch=('aarch64')
 url="https://github.com/MadejaJiri/tactile"

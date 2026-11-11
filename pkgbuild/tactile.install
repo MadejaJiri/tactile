@@ -18,6 +18,7 @@ post_upgrade() {
 }
 
 pre_remove() {
+  systemctl disable tactile-actuator.service 2>/dev/null || true
   systemctl disable --now tactiled.service 2>/dev/null || true
 }
 
