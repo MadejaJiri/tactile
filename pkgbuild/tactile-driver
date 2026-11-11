@@ -13,9 +13,9 @@
 # loads once DKMS has built it. `reload` swaps only the trackpad's driver, so
 # the trackpad pauses for a moment and the keyboard keeps working.
 #
-# The actuator is the part under the trackpad that makes the click. On some
-# boots the kernel does not find it, and then only the trackpad's firmware
-# can play the click. Probing the trackpad's controller again brings it back:
+# The actuator is the part under the trackpad that makes the click. While
+# Tactile was being developed, some boots came up without it (none since
+# 0.2.1), and then only the trackpad's firmware can play the click. Probing the trackpad's controller again brings it back:
 # that is `repair`, and what `--probe` and `stock` do as well. It pauses the
 # keyboard and the trackpad for two seconds, and on the one machine this was
 # written on it once froze everything for four minutes instead. So it is

@@ -197,21 +197,19 @@ sudo tactile-driver boot-repair on   # do that at every boot that needs it (off 
 `reload` swaps only the trackpad's driver: the trackpad pauses for a moment
 and the keyboard keeps working.
 
-### The actuator that goes missing
+### If the actuator is missing
 
-On the machine above, three of five boots did not find the actuator, the part
-that makes the click, with or without Tactile. The firmware still clicks then,
-but the driver has nothing to play its own click with, and Tactile says so.
-The likely cause is in the kernel's SPI transport, which asks for each
-device's description once and does not ask again when the answer is lost. It
-is reported as
-[linux-aurora#447](https://github.com/omacom/linux-aurora/issues/447).
+While Tactile was being developed, three of five boots came up without the
+actuator, the part that makes the click. The firmware still clicks then, but
+the driver has nothing to play its own click with, and Tactile says so. It
+has not happened since version 0.2.1, and what caused it was never pinned
+down, so the tools for it stay.
 
 Probing the trackpad's controller again (`repair`) brings the actuator back,
 at the price of a two-second pause of keyboard and trackpad. It is not run
 automatically: one such probe out of eight froze the whole machine for four
-minutes, for a reason not yet found. `sudo tactile-driver boot-repair on`
-runs it at every boot that needs it, if you accept that.
+minutes, for a reason not found. `sudo tactile-driver boot-repair on` runs it
+at every boot that needs it, if you accept that.
 
 ## How it works
 

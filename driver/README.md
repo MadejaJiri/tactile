@@ -166,6 +166,8 @@ a firm press peaks at 450 to 1100.
 - Reported upstream as
   [linux-aurora#446](https://github.com/omacom/linux-aurora/issues/446): the
   helper returning success without sending anything, the feature-versus-output
-  finding, and the transport ignoring the reply's status byte. The actuator
-  that is missing after some boots is
-  [linux-aurora#447](https://github.com/omacom/linux-aurora/issues/447).
+  finding, and the transport ignoring the reply's status byte.
+- During development the actuator was missing after three of five boots. It
+  has not been since 0.2.1, and the cause was never found
+  ([linux-aurora#447](https://github.com/omacom/linux-aurora/issues/447),
+  closed as no longer reproducing).

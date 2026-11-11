@@ -59,8 +59,9 @@ order, so the values it prints back are the ones in effect.
 - "saved, but the loaded driver is older than this Tactile": some settings
   wait for the new driver, which loads at the next boot or with
   `sudo tactile-driver reload` (ask the user to run it).
-- "the actuator was not found at this boot": the kernel missed the part that
-  makes the click; the firmware's click still works. `tactile-driver help`
+- "the actuator was not found at this boot": the part that makes the click
+  did not come up (seen during development, not since 0.2.1); the firmware's
+  click still works. `tactile-driver help`
   explains the repair and its risk. Do not run it unasked.
 - "the trackpad refused to hand over the click": it only switches while no
   finger is on it. Ask the user to lift their hand and touch the pad once.

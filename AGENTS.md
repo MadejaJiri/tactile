@@ -58,8 +58,8 @@ What `tactile status` can say about the click:
 - `played by the trackpad's firmware`: Tactile is switched off (`hostClick=0`),
   or the kernel's own driver is loaded. `sudo tactile-driver reload` or a
   reboot loads Tactile's.
-- `the actuator was not found at this boot`: a kernel bug, not something
-  Tactile did; the firmware's click still works. See below.
+- `the actuator was not found at this boot`: seen while Tactile was being
+  developed and not since 0.2.1; the firmware's click still works. See below.
 
 ## Using it
 
