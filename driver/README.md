@@ -163,6 +163,9 @@ a firm press peaks at 450 to 1100.
   tested; the driver only switches while the pad is idle.
 - Only tested on J314. Other SPI trackpads whose descriptor hides `0x21` take
   the new path; trackpads that declare it are unaffected.
-- Not reported upstream yet. Three things are worth it: the helper returning
-  success without sending anything, the feature-versus-output finding, and the
-  transport ignoring the reply's status byte.
+- Reported upstream as
+  [linux-aurora#446](https://github.com/omacom/linux-aurora/issues/446): the
+  helper returning success without sending anything, the feature-versus-output
+  finding, and the transport ignoring the reply's status byte. The actuator
+  that is missing after some boots is
+  [linux-aurora#447](https://github.com/omacom/linux-aurora/issues/447).

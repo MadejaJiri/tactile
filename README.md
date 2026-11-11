@@ -202,12 +202,14 @@ and the keyboard keeps working.
 On the machine above, three of five boots did not find the actuator, the part
 that makes the click, with or without Tactile. The firmware still clicks then,
 but the driver has nothing to play its own click with, and Tactile says so.
-The cause is in the kernel's SPI transport, which asks for each device's
-description once and does not ask again when the answer is lost.
+The likely cause is in the kernel's SPI transport, which asks for each
+device's description once and does not ask again when the answer is lost. It
+is reported as
+[linux-aurora#447](https://github.com/omacom/linux-aurora/issues/447).
 
 Probing the trackpad's controller again (`repair`) brings the actuator back,
 at the price of a two-second pause of keyboard and trackpad. It is not run
-automatically: one such probe out of nine froze the whole machine for four
+automatically: one such probe out of eight froze the whole machine for four
 minutes, for a reason not yet found. `sudo tactile-driver boot-repair on`
 runs it at every boot that needs it, if you accept that.
 
@@ -220,7 +222,8 @@ request that tells the firmware to stop was silently never sent, because the
 trackpad does not announce that it understands it. It does understand it. The
 patch sends it, checks that it took, and only then starts playing clicks; the
 whole story, with the protocol notes, is in [driver/README.md](driver/README.md).
-That fix is `driver/0001-…patch`, written to go upstream. What Tactile adds
+That fix is `driver/0001-…patch`, written to go upstream and reported as
+[linux-aurora#446](https://github.com/omacom/linux-aurora/issues/446). What Tactile adds
 on top for its settings (the rule for extra fingers, the Force Click key, a
 strength of its own for the release) is `driver/0002-…patch`.
 
