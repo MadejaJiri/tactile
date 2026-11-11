@@ -28,7 +28,7 @@ fi
 # down a pipe, the keyboard has to be handed to it by name.
 if [ -t 0 ]; then
 	exec "$SRC/install.sh"
-elif [ -r /dev/tty ]; then
+elif (exec </dev/tty) 2>/dev/null; then
 	exec "$SRC/install.sh" </dev/tty
 else
 	echo "get.sh: no terminal to ask from. Run this yourself: $SRC/install.sh" >&2
