@@ -1,18 +1,25 @@
 #!/bin/sh
 # Builds the settings app into build/tactile and its service into
-# build/daemon/tactiled.
+# build/daemon/tactiled. The compiler's output goes to build/build.log; if the
+# build fails, its errors are shown.
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+LOG="$ROOT/build/build.log"
 
 mkdir -p "$ROOT/build" "$ROOT/build/daemon"
+: >"$LOG"
 
-cd "$ROOT/build"
-qmake6 "$ROOT/tactile.pro"
-make -j"$(nproc)"
+build() {
+	cd "$1"
+	if ! { qmake6 "$2" && make -j"$(nproc)"; } >>"$LOG" 2>&1; then
+		grep -E "error|Error" "$LOG" | head -n 20 >&2 || true
+		echo "bin/build: the build failed; the whole output is in $LOG" >&2
+		exit 1
+	fi
+}
 
-cd "$ROOT/build/daemon"
-qmake6 "$ROOT/tactiled.pro"
-make -j"$(nproc)"
+build "$ROOT/build" "$ROOT/tactile.pro"
+build "$ROOT/build/daemon" "$ROOT/tactiled.pro"
 
 echo "Built $ROOT/build/tactile and $ROOT/build/daemon/tactiled"

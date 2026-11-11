@@ -52,11 +52,13 @@ esac
 #    Prints "stale" if an image for this kernel still has the kernel's own
 #    driver, "carried" if it has Tactile's, and "disk" if no image has the
 #    driver at all, in which case it is loaded from the disk later.
+#    Some setups boot the initramfs as it is, others a unified kernel image
+#    made from it on the EFI partition, which only root may list; both count.
 boot_image() {
 	local image files state=disk
-	for image in /boot/initramfs-*.img; do
+	while IFS= read -r image; do
 		case "$image" in *fallback*) continue ;; esac
-		files="$(sudo lsinitcpio "$image" 2>/dev/null | grep "/$KERNEL/.*hid-magicmouse" || true)"
+		files="$(sudo lsinitcpio "$image" 2>/dev/null </dev/null | grep "/$KERNEL/.*hid-magicmouse" || true)"
 		case "$files" in
 		"") ;;
 		*/updates/*) state=carried ;;
@@ -65,8 +67,18 @@ boot_image() {
 			return
 			;;
 		esac
-	done
+	done < <(sudo sh -c 'ls /boot/initramfs-*.img /boot/EFI/Linux/*.efi /boot/efi/EFI/Linux/*.efi /efi/EFI/Linux/*.efi 2>/dev/null' </dev/null || true)
 	echo "$state"
+}
+
+# Omarchy's Limine setup wraps mkinitcpio, so that the unified image is made
+# again as well.
+rebuild_boot_image() {
+	if command -v limine-mkinitcpio >/dev/null 2>&1; then
+		sudo limine-mkinitcpio >/dev/null 2>&1 || true
+	else
+		sudo mkinitcpio -P >/dev/null 2>&1 || true
+	fi
 }
 case "$installed" in
 */updates/*)
@@ -76,7 +88,7 @@ case "$installed" in
 		state="$(boot_image)"
 		if [ "$state" = stale ]; then
 			echo "  ..   the boot image still has the kernel's own driver; rebuilding it"
-			sudo mkinitcpio -P >/dev/null 2>&1 || true
+			rebuild_boot_image
 			state="$(boot_image)"
 		fi
 		case "$state" in
