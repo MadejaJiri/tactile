@@ -49,31 +49,41 @@ esac
 # 2. The image the machine boots from carries it. The trackpad's driver is
 #    loaded from there, before the disk is unlocked, so this is what decides
 #    which one runs after a reboot.
-carried() {
-	local image found=1
+#    Prints "stale" if an image for this kernel still has the kernel's own
+#    driver, "carried" if it has Tactile's, and "disk" if no image has the
+#    driver at all, in which case it is loaded from the disk later.
+boot_image() {
+	local image files state=disk
 	for image in /boot/initramfs-*.img; do
 		case "$image" in *fallback*) continue ;; esac
-		sudo test -e "$image" || continue
-		if sudo lsinitcpio "$image" 2>/dev/null | grep -q "/$KERNEL/updates/.*hid-magicmouse"; then
-			found=0
-		elif sudo lsinitcpio "$image" 2>/dev/null | grep -q "/$KERNEL/"; then
-			return 1
-		fi
+		files="$(sudo lsinitcpio "$image" 2>/dev/null | grep "/$KERNEL/.*hid-magicmouse" || true)"
+		case "$files" in
+		"") ;;
+		*/updates/*) state=carried ;;
+		*)
+			echo stale
+			return
+			;;
+		esac
 	done
-	return $found
+	echo "$state"
 }
 case "$installed" in
 */updates/*)
-	if carried; then
-		ok "the boot image loads it"
+	if ! command -v lsinitcpio >/dev/null 2>&1; then
+		echo "  ..   no mkinitcpio here: if your boot image includes hid-magicmouse, rebuild it"
 	else
-		echo "  ..   the boot image still has the kernel's own driver; rebuilding it"
-		sudo mkinitcpio -P >/dev/null 2>&1 || true
-		if carried; then
-			ok "the boot image loads it"
-		else
-			bad "the boot image does not carry the driver (sudo mkinitcpio -P shows why)"
+		state="$(boot_image)"
+		if [ "$state" = stale ]; then
+			echo "  ..   the boot image still has the kernel's own driver; rebuilding it"
+			sudo mkinitcpio -P >/dev/null 2>&1 || true
+			state="$(boot_image)"
 		fi
+		case "$state" in
+		carried) ok "the boot image loads it" ;;
+		disk) ok "the boot image leaves the driver to the disk, where Tactile's is the one found" ;;
+		*) bad "the boot image still has the kernel's own driver (sudo mkinitcpio -P shows why)" ;;
+		esac
 	fi
 	;;
 esac
@@ -85,11 +95,14 @@ else
 	bad "the service did not start: journalctl -u tactiled -b"
 fi
 
-# 4. What is loaded right now.
-if [ -e /sys/module/hid_magicmouse/parameters/haptic_debounce_ms ]; then
-	ok "Tactile's driver is loaded"
+# 4. What is loaded right now. A driver loaded before this installation stays
+#    loaded, whichever it is, until a reboot or a switch by hand.
+have="$(modinfo -k "$KERNEL" -F version hid_magicmouse 2>/dev/null || true)"
+runs="$(cat /sys/module/hid_magicmouse/version 2>/dev/null || true)"
+if [ -n "$runs" ] && [ "$runs" = "$have" ]; then
+	ok "Tactile's driver $runs is loaded"
 elif [ "$PROBLEMS" = 0 ]; then
-	echo "  ..   the kernel's own driver is still loaded; Tactile's takes over at the next boot"
+	echo "  ..   the installed driver is not the one loaded right now; it takes over at the next boot"
 	answer=n
 	if [ -t 0 ]; then
 		read -r -p "       Switch now? Keyboard and trackpad pause for two seconds. [Y/n] " answer || answer=n

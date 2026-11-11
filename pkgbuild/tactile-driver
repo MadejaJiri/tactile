@@ -32,16 +32,31 @@ running() {
 }
 
 status() {
-	local file
+	local file have="" runs=""
 	file="$(installed)"
 	case "$file" in
-	*/updates/*) echo "installed  Tactile's driver ($file)" ;;
+	*/updates/*)
+		have="$(modinfo -F version "$file" 2>/dev/null || true)"
+		echo "installed  Tactile's driver ${have:+$have }($file)"
+		;;
 	"") echo "installed  no hid-magicmouse for kernel $KERNEL" ;;
 	*) echo "installed  the kernel's own driver only ($file)" ;;
 	esac
 	case "$(running)" in
-	tactile) echo "running    Tactile's driver" ;;
-	stock) echo "running    the kernel's own driver" ;;
+	tactile)
+		runs="$(cat /sys/module/hid_magicmouse/version 2>/dev/null || true)"
+		if [ -n "$have" ] && [ "$runs" != "$have" ]; then
+			echo "running    Tactile's driver ${runs:-(loaded by hand)}; the installed one takes over at the next boot, or with: sudo tactile-driver reload"
+		else
+			echo "running    Tactile's driver${runs:+ $runs}"
+		fi
+		;;
+	stock)
+		case "$file" in
+		*/updates/*) echo "running    the kernel's own driver; Tactile's takes over at the next boot, or with: sudo tactile-driver reload" ;;
+		*) echo "running    the kernel's own driver" ;;
+		esac
+		;;
 	none) echo "running    hid-magicmouse is not loaded" ;;
 	esac
 	if command -v dkms >/dev/null 2>&1; then

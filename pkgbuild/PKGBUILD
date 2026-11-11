@@ -32,7 +32,7 @@ package() {
   # The driver travels as source. DKMS builds it for every installed kernel,
   # and again for each new one, from /usr/src/<name>-<version>.
   local src="$pkgdir/usr/src/$pkgname-$pkgver"
-  install -Dm644 -t "$src" driver/Makefile driver/hid-magicmouse.c driver/hid-haptic.h driver/hid-ids.h
+  install -Dm644 -t "$src" driver/Makefile driver/hid-magicmouse.c driver/hid-haptic.h driver/hid-ids.h driver/tactile-version.h
   install -Dm755 -t "$src" driver/abi-check.sh
   install -Dm644 -t "$src/abi" driver/abi/hid-haptic.layout driver/abi/stock.params
   sed "s/@VERSION@/$pkgver/" driver/dkms.conf > "$src/dkms.conf"

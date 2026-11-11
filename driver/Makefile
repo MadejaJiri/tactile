@@ -2,6 +2,8 @@
 # kernel; `make` by hand builds for the running one.
 ifneq ($(KERNELRELEASE),)
 obj-m := hid-magicmouse.o
+# See tactile-version.h for why the version comes in this way.
+ccflags-y += -include $(src)/tactile-version.h
 else
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
