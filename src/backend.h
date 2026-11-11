@@ -20,6 +20,7 @@ class Backend : public QObject {
     Q_PROPERTY(QString problem READ problem NOTIFY statusChanged)
     Q_PROPERTY(QString module READ module NOTIFY statusChanged)
     Q_PROPERTY(QString owner READ owner NOTIFY statusChanged)
+    Q_PROPERTY(QString pending READ pending NOTIFY statusChanged)
     Q_PROPERTY(QString kernel READ kernel NOTIFY statusChanged)
     Q_PROPERTY(QStringList errors READ errors NOTIFY statusChanged)
     Q_PROPERTY(QVariantMap defaults READ defaults NOTIFY statusChanged)
@@ -75,6 +76,8 @@ public:
     QString problem() const;
     QString module() const { return m_state.value("module").toString(); }
     QString owner() const { return m_state.value("owner").toString(); }
+    // "taking" or "returning" while the click is changing hands, else empty.
+    QString pending() const { return m_state.value("pending").toString(); }
     QString kernel() const { return m_state.value("kernel").toString(); }
     QStringList errors() const;
     QVariantMap defaults() const { return m_state.value("defaults").toObject().toVariantMap(); }

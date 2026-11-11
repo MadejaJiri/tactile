@@ -101,9 +101,11 @@
   "Tactile plays the click": "Klik přehrává Tactile",
   "The click ends when the pressure falls below this. The tick marks 10% under the click pressure, the closest that is recommended.": "Klik skončí, když tlak klesne pod tuto hodnotu. Značka je 10 % pod tlakem kliku, blíž se to nedoporučuje.",
   "The loaded driver is older than this version of Tactile, so some of the settings below do nothing yet. The new one takes over at the next boot, or with: %1": "Načtený ovladač je starší než tato verze aplikace Tactile, takže některá nastavení níže zatím nic nedělají. Nový se načte při příštím startu, nebo příkazem: %1",
-  "The pad adds up the pressure of all fingers. Each finger beyond the first raises the click pressure by this much, so two fingers resting to scroll do not click.": "Trackpad sčítá tlak všech prstů. Každý prst navíc zvýší tlak kliku o tuto hodnotu, takže dva prsty položené při posouvání nekliknou.",
   "The tick is what suits a click pressure of %1: about %2.": "Značka ukazuje, co odpovídá tlaku kliku %1: asi %2.",
   "The trackpad's firmware plays the click at its own pressure. Switch Tactile on at the top to set it here.": "Klik přehrává firmware trackpadu při svém vlastním tlaku. Chcete-li ho nastavit tady, zapněte nahoře Tactile.",
   "With two or more fingers down, nothing clicks. That includes the two-finger click, which is usually the right click.": "Se dvěma a více prsty na trackpadu se nic neklikne. Týká se to i kliku dvěma prsty, což bývá pravé tlačítko.",
-  "Pressed when Force Click starts and let go when it ends. Bind it in Hyprland as code:%1 to give Force Click an action.": "Stiskne se, když silný klik začne, a uvolní se, když skončí. Přiřaďte jí v Hyprlandu akci jako code:%1 a silný klik ji spustí."
+  "Pressed when Force Click starts and let go when it ends. Bind it in Hyprland as code:%1 to give Force Click an action.": "Stiskne se, když silný klik začne, a uvolní se, když skončí. Přiřaďte jí v Hyprlandu akci jako code:%1 a silný klik ji spustí.",
+  "Taking the click over… lift your fingers from the trackpad": "Přebírám klik… zvedněte prsty z trackpadu",
+  "Handing the click back… lift your fingers from the trackpad": "Vracím klik… zvedněte prsty z trackpadu",
+  "The pad adds up the pressure of all fingers. Each finger beyond the first raises the click pressure by this share of it, so two fingers resting to scroll do not click. Now: a click with two fingers takes %1.": "Trackpad sčítá tlak všech prstů. Každý prst navíc zvýší tlak kliku o tento podíl, takže dva prsty položené při posouvání nekliknou. Teď: klik dvěma prsty vyžaduje %1."
 }

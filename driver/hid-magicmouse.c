@@ -85,7 +85,30 @@ MODULE_PARM_DESC(haptic_deep_strength, "strength at 100% intensity for a deep cl
  * feels. With this off, the firmware provides the feedback itself.
  */
 static bool haptic_press;
-module_param(haptic_press, bool, 0644);
+
+/*
+ * Local patch: act on a change at once. The mode worker used to be started
+ * only by the next touch, so turning this on or off did nothing until the pad
+ * was touched, and a count of earlier refusals could keep it from starting at
+ * all.
+ */
+static void magicmouse_haptic_press_changed(void);
+
+static int param_set_haptic_press(const char *val, const struct kernel_param *kp)
+{
+	int ret = param_set_bool(val, kp);
+
+	if (!ret)
+		magicmouse_haptic_press_changed();
+	return ret;
+}
+
+static const struct kernel_param_ops haptic_press_ops = {
+	.flags = KERNEL_PARAM_OPS_FL_NOARG,
+	.set = param_set_haptic_press,
+	.get = param_get_bool,
+};
+module_param_cb(haptic_press, &haptic_press_ops, &haptic_press, 0644);
 MODULE_PARM_DESC(haptic_press, "play click feedback from the host on physical press (default off: the actuator's firmware does it)");
 
 static u8 haptic_press_pulses = 1;
@@ -371,6 +394,7 @@ struct magicmouse_sc {
 	u64 haptic_touch_ns;
 	u64 haptic_mode_checked_ns;
 	u8 haptic_mode_failures;
+	struct list_head haptic_node;
 	u8 haptic_last_std_buttons;	/* trace only */
 
 	struct hid_device *hdev;
@@ -1721,6 +1745,23 @@ static bool magicmouse_haptic_effects_loaded(struct magicmouse_sc *msc)
  * magicmouse_haptic_click() leaves both the button and the feedback to the
  * firmware, so exactly one of the two plays the click at any time.
  */
+static void magicmouse_haptic_mode_worker(struct work_struct *ws);
+
+/* Every trackpad whose click this driver can play, for the option above. */
+static LIST_HEAD(magicmouse_haptic_list);
+static DEFINE_MUTEX(magicmouse_haptic_list_lock);
+
+static void magicmouse_haptic_press_changed(void)
+{
+	struct magicmouse_sc *msc;
+
+	guard(mutex)(&magicmouse_haptic_list_lock);
+	list_for_each_entry(msc, &magicmouse_haptic_list, haptic_node) {
+		WRITE_ONCE(msc->haptic_mode_failures, 0);
+		mod_delayed_work(msc->haptics->wq, &msc->haptic_mode_work, 0);
+	}
+}
+
 static void magicmouse_haptic_mode_worker(struct work_struct *ws)
 {
 	struct magicmouse_sc *msc = container_of(to_delayed_work(ws),
@@ -1736,11 +1777,16 @@ static void magicmouse_haptic_mode_worker(struct work_struct *ws)
 	have = READ_ONCE(haptics->mode);
 	if (haptic_press)
 		want = HID_HAPTIC_MODE_HOST;
-	else if (have == HID_HAPTIC_MODE_HOST &&
-		 !magicmouse_haptic_effects_loaded(msc))
-		want = HID_HAPTIC_MODE_DEVICE;
-	else
+	else if (have != HID_HAPTIC_MODE_HOST)
 		return;
+	else if (!magicmouse_haptic_effects_loaded(msc))
+		want = HID_HAPTIC_MODE_DEVICE;
+	else {
+		/* Userspace is still playing something; look again shortly. */
+		queue_delayed_work(haptics->wq, &msc->haptic_mode_work,
+				   msecs_to_jiffies(HAPTIC_MODE_IDLE_MS));
+		return;
+	}
 
 	if (ktime_get_ns() - READ_ONCE(msc->haptic_touch_ns) <
 	    (u64)HAPTIC_MODE_IDLE_MS * NSEC_PER_MSEC) {
@@ -1812,6 +1858,10 @@ failed:
 	failures = READ_ONCE(msc->haptic_mode_failures) + 1;
 	WRITE_ONCE(msc->haptic_mode_failures, failures);
 	if (failures < HAPTIC_MODE_RETRIES) {
+		hid_info(msc->hdev,
+			 "the actuator did not go to %s-controlled mode (%d), asking again (%u of %u)\n",
+			 want == HID_HAPTIC_MODE_HOST ? "host" : "device", ret,
+			 failures, HAPTIC_MODE_RETRIES);
 		queue_delayed_work(haptics->wq, &msc->haptic_mode_work,
 				   msecs_to_jiffies(500 << failures));
 		return;
@@ -2069,6 +2119,10 @@ static bool magicmouse_haptic_click(struct magicmouse_sc *msc, u32 pressure,
 }
 
 static void magicmouse_haptic_forget_mode(struct magicmouse_sc *msc)
+{
+}
+
+static void magicmouse_haptic_press_changed(void)
 {
 }
 #endif
@@ -2584,6 +2638,8 @@ static int magicmouse_init_haptics(struct magicmouse_sc *msc, struct hid_device 
 	}
 
 	msc->haptics = haptics;
+	scoped_guard(mutex, &magicmouse_haptic_list_lock)
+		list_add(&msc->haptic_node, &magicmouse_haptic_list);
 
 	/* Take the actuator for host-driven clicks once it has shown up. */
 	if (haptic_press)
@@ -2597,6 +2653,9 @@ static void magicmouse_teardown_haptics(struct magicmouse_sc *msc)
 {
 	if (!msc->haptics)
 		return;
+
+	scoped_guard(mutex, &magicmouse_haptic_list_lock)
+		list_del(&msc->haptic_node);
 
 	/* It re-queues itself, and the other workers queue it: stop it for good. */
 	disable_delayed_work_sync(&msc->haptic_mode_work);

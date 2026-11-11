@@ -56,6 +56,7 @@ private:
 
     QJsonObject state() const;
     QString owner() const;
+    QString pending() const;
     void load();
     void save();
     void apply();

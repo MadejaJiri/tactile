@@ -32,7 +32,7 @@ firmware's built-in click sits near 125, a hard press peaks around 1000.
 | `hostClick` | 1: the driver plays the click at the pressures below. 0: the trackpad's firmware does, at its own fixed pressure. |
 | `press`, `release` | Pressure at which a click starts and ends. `release` stays at least 5 under `press`; 10% under is a good value. |
 | `debounce` | Milliseconds the pressure must stay low to end a click. |
-| `fingerExtra` | Pressure each finger beyond the first adds to every threshold, so two fingers resting to scroll do not click. |
+| `fingerPercent` | What each finger beyond the first adds to every threshold, in percent of `press`, so two fingers resting to scroll do not click. Default 100; 0 switches it off. |
 | `oneFinger` | 1: a click starts only with one finger on the pad. This also stops the two-finger (right) click. |
 | `strength`, `softness` | Bytes of the click's waveform, 1 to 255. 0 uses the driver's default for the model. |
 | `releaseStrength` | Strength of the pulse on release. 0: the same as `strength`. |

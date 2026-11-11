@@ -18,7 +18,9 @@ PressureChart::PressureChart(QQuickItem *parent) : QQuickPaintedItem(parent) {
     setAntialiasing(true);
     // Repaints only while something moves: a line that has scrolled out flat
     // costs nothing.
-    m_timer.setInterval(16);
+    // The chart crawls: thirty frames a second are as smooth as sixty here,
+    // at half the work for a window that is mostly sliders.
+    m_timer.setInterval(33);
     connect(&m_timer, &QTimer::timeout, this, &PressureChart::tick);
     connect(this, &PressureChart::styleChanged, this, [this] { update(); });
     connect(this, &QQuickItem::visibleChanged, this, [this] {
@@ -92,7 +94,7 @@ void PressureChart::paint(QPainter *painter) {
         painter->setPen(axisText);
         painter->drawText(QRectF(0, y - 8, r.left() - 8, 16), Qt::AlignRight | Qt::AlignVCenter, locale.toString(value));
     }
-    for (int seconds = 0; seconds <= int(WindowSeconds); seconds += 2) {
+    for (int seconds = 0; seconds <= int(WindowSeconds); seconds += 4) {
         const qreal x = std::round(r.right() - seconds / WindowSeconds * r.width()) + .5;
         painter->setPen(QPen(grid, 1));
         painter->drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()));

@@ -26,7 +26,7 @@ class PressureChart : public QQuickPaintedItem {
     Q_PROPERTY(int corner MEMBER m_corner NOTIFY styleChanged)
 
 public:
-    static constexpr double WindowSeconds = 8;
+    static constexpr double WindowSeconds = 16;
     static constexpr int Top = 1500;
 
     explicit PressureChart(QQuickItem *parent = nullptr);

@@ -23,8 +23,8 @@ const QList<Settings::Field> &Settings::fields() {
          "pressure at which it ends, at least 5 under press"},
         {"debounce", 0, 200, 1, "haptic_debounce_ms",
          "ms the pressure must stay low before the click ends"},
-        {"fingerExtra", 0, 300, 0, "haptic_finger_extra",
-         "pressure each finger beyond the first adds to every threshold"},
+        {"fingerPercent", 0, 300, 100, "haptic_finger_extra",
+         "what each finger beyond the first adds to every threshold, in percent of press"},
         {"oneFinger", 0, 1, 0, "haptic_one_finger",
          "1: a click starts only with exactly one finger on the pad"},
         {"strength", 0, 255, 105, "haptic_strength",
@@ -122,6 +122,10 @@ int Settings::suggestedStrength(int press) {
     return std::clamp(int(std::lround(strength / 5.0)) * 5, 20, 255);
 }
 
+int Settings::fingerExtra() const {
+    return int(std::lround(value("press") * value("fingerPercent") / 100.0));
+}
+
 int Settings::suggestedRelease(int press) {
     return std::max(10, std::min(press - ReleaseGap, int(std::lround(press * 0.9))));
 }
@@ -181,8 +185,15 @@ QList<QPair<QString, int>> Settings::parameters() const {
         const QString key = f.key;
         if (!f.parameter || key == "hostClick")
             continue;
+        int number = value(key);
         // The driver switches Force Click off with a threshold of 0.
-        list.append({f.parameter, key == "force" && !value("forceClick") ? 0 : value(key)});
+        if (key == "force" && !value("forceClick"))
+            number = 0;
+        // The driver takes a pressure; the setting is a share of the click
+        // pressure, so that it follows a lighter or firmer click.
+        if (key == "fingerPercent")
+            number = fingerExtra();
+        list.append({f.parameter, number});
     }
     list.append({"haptic_press", value("hostClick")});
     return list;

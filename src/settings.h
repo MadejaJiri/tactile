@@ -53,6 +53,8 @@ public:
     QString feel() const;
     // The same, or "firmware" while the trackpad plays the click itself.
     QString preset() const;
+    // The pressure each finger beyond the first adds, from fingerPercent.
+    int fingerExtra() const;
 
     QJsonObject toJson() const;
     // Takes known keys from the object and ignores the rest; false with a

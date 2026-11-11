@@ -149,6 +149,7 @@ ApplicationWindow {
             contentWidth: width
             contentHeight: Math.max(height, column.implicitHeight + 40)
             boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
             clip: true
             ScrollBar.vertical: ScrollBar {}
 
@@ -182,8 +183,19 @@ ApplicationWindow {
                         onToggled: backend.set("hostClick", checked ? 1 : 0)
                         Accessible.name: qsTr("Tactile plays the click")
                     }
+                    BusyIndicator {
+                        // The click changes hands only while no finger is on
+                        // the pad, which can take a moment.
+                        visible: backend.pending !== ""
+                        running: visible
+                        implicitWidth: 22
+                        implicitHeight: 22
+                        padding: 0
+                    }
                     Label {
                         text: !backend.connected ? qsTr("Not connected")
+                            : backend.pending === "taking" ? qsTr("Taking the click over… lift your fingers from the trackpad")
+                            : backend.pending === "returning" ? qsTr("Handing the click back… lift your fingers from the trackpad")
                             : !win.hostClick ? qsTr("Off: the trackpad's firmware plays the click, as without Tactile")
                             : backend.problem === "" ? qsTr("Tactile plays the click")
                             : qsTr("The trackpad's firmware plays the click")
@@ -431,10 +443,16 @@ ApplicationWindow {
                             enabled: win.hostClick
                         }
                         SettingRow {
-                            key: "fingerExtra"
+                            key: "fingerPercent"
                             label: qsTr("Extra pressure per extra finger")
+                            unit: "%"
                             zeroText: qsTr("None")
-                            hint: qsTr("The pad adds up the pressure of all fingers. Each finger beyond the first raises the click pressure by this much, so two fingers resting to scroll do not click.")
+                            hint: {
+                                translator.language
+                                const press = backend.settings.press ?? 0
+                                const extra = Math.round(press * (backend.settings.fingerPercent ?? 0) / 100)
+                                return qsTr("The pad adds up the pressure of all fingers. Each finger beyond the first raises the click pressure by this share of it, so two fingers resting to scroll do not click. Now: a click with two fingers takes %1.").arg(win.num(press + extra))
+                            }
                             enabled: win.hostClick
                         }
                         SwitchRow {

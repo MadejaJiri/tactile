@@ -53,7 +53,7 @@ back and nothing else is left behind except your settings in `/var/lib/tactile`.
 
 ## The window
 
-The chart shows the summed pressure of your fingers over the last eight
+The chart shows the summed pressure of your fingers over the last sixteen
 seconds, on the trackpad's own scale: a resting finger reads 30 to 60, the
 firmware's built-in click sits near 125, a firm press peaks around 1000. The
 dashed lines are where a click starts and ends; drag them, or use the sliders.
@@ -62,6 +62,8 @@ how much harder you press than a click needs.
 
 - **The switch at the top** decides who plays the click: Tactile, with
   everything below, or the trackpad's firmware exactly as without Tactile.
+  The click changes hands once no finger is on the pad; until then the
+  window says it is waiting.
 - **Presets**: Light, Medium and Firm set the click pressure together with the
   feedback that suits it. Medium is the default, and what Reset goes back to.
   Change anything and the fourth button, Custom, lights up.
@@ -70,8 +72,9 @@ how much harder you press than a click needs.
   under it), and how long the pressure has to stay low before it counts as
   released.
 - **More than one finger**: the pad adds up the pressure of all fingers, so
-  two fingers resting to scroll can click by accident. You can make every
-  extra finger raise the click pressure, or let only one finger start a click.
+  two fingers resting to scroll can click by accident. So every extra finger
+  raises the click pressure, by default by as much again, and you can let
+  only one finger start a click at all.
 - **Feedback**: how strong the pulse is, its shape, a different strength on
   release, and how many pulses a press and a release play. The small chart
   shows the pulses against time. A light click wants a gentle pulse and a firm
@@ -137,7 +140,7 @@ tactile get press
 tactile set press=80 release=70
 tactile set hostClick=off      # hand the click back to the firmware; on takes it again
 tactile preset light           # light, medium, firm, or firmware
-tactile set fingerExtra=40     # each extra finger adds 40 to the click pressure
+tactile set fingerPercent=50   # each extra finger adds half the click pressure
 tactile set oneFinger=on       # or: only one finger starts a click
 tactile set forceKey=f13       # Force Click holds F13; forceKey=none for no key
 tactile click                  # play one click (press, release, or force)
@@ -153,7 +156,7 @@ Each takes `--json` and exits 0 or 1. None needs `sudo`.
 | `hostClick` | 1: Tactile's driver plays the click. 0: the trackpad's firmware does |
 | `press`, `release` | pressure at which a click starts and ends; `release` stays at least 5 under `press` |
 | `debounce` | ms the pressure must stay low before the click ends |
-| `fingerExtra` | pressure each finger beyond the first adds to every threshold |
+| `fingerPercent` | what each finger beyond the first adds to every threshold, in percent of `press` (default 100, 0 for nothing) |
 | `oneFinger` | 1: a click starts only with exactly one finger on the pad |
 | `strength`, `softness` | the two bytes of the click's waveform, 1 to 255 (0: the driver's default) |
 | `releaseStrength` | strength of the pulse on release (0: same as `strength`) |

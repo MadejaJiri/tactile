@@ -81,25 +81,13 @@ ColumnLayout {
         from: row.from
         to: row.to
         stepSize: 1
-        // The handle stands only where a value is, also while it is dragged.
-        snapMode: Slider.SnapAlways
+        // Where there are few values the handle stands only on one, also
+        // while it is dragged, and the style marks each. A long slider must
+        // not: the style draws one mark per step, hundreds of them.
+        snapMode: row.stepped ? Slider.SnapAlways : Slider.NoSnap
         value: row.shown
         onMoved: backend.set(row.key, Math.round(value))
         Accessible.name: row.label
-
-        // One dot per value, where there are few.
-        Repeater {
-            model: row.stepped ? row.to - row.from + 1 : 0
-            Rectangle {
-                required property int index
-                width: 4
-                height: 4
-                radius: 2
-                x: row.xFor(row.from + index) - 2
-                y: slider.height - 5
-                color: row.enabled ? "#5c5c64" : "#3a3a42"
-            }
-        }
 
         Rectangle {
             visible: row.mark >= row.from && row.mark <= row.to

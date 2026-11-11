@@ -9,4 +9,4 @@
  */
 #include <linux/module.h>
 
-MODULE_VERSION("0.2.0");
+MODULE_VERSION("0.2.1");

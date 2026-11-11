@@ -294,6 +294,16 @@ QString Daemon::owner() const {
     return m_loggedOwner.isEmpty() ? "host" : m_loggedOwner;
 }
 
+QString Daemon::pending() const {
+    // The driver hands the click over, and takes it back, only once no finger
+    // is on the pad. Until its log says so, the old side is still playing.
+    if (m_kind != Driver::Patched)
+        return {};
+    if (m_settings.value("hostClick"))
+        return m_loggedOwner == "firmware" ? "taking" : QString();
+    return m_loggedOwner == "host" ? "returning" : QString();
+}
+
 QJsonObject Daemon::state() const {
     // Strength and softness of 0 stand for the driver's own waveform bytes,
     // which depend on how the pad is attached. The app shows the real number.
@@ -306,6 +316,7 @@ QJsonObject Daemon::state() const {
         {"module", Driver::kindName(m_kind)},
         {"trackpad", m_trackpadPresent},
         {"owner", owner()},
+        {"pending", pending()},
         {"holding", m_holder != nullptr},
         {"settings", m_settings.toJson()},
         {"preset", m_settings.preset()},
@@ -330,7 +341,7 @@ void Daemon::load() {
     QJsonObject current;
     for (const auto &field : Settings::fields()) {
         const int value = field.parameter ? m_driver.read(field.parameter) : -1;
-        if (value >= 0)
+        if (value >= 0 && QLatin1String(field.key) != "fingerPercent")
             current.insert(field.key, value);
     }
     const bool force = current.value("force").toInt() > 0;

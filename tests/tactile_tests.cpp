@@ -189,6 +189,24 @@ private slots:
         QCOMPARE(Settings::suggestedRelease(20), 15);
     }
 
+    void extraFingersAddAShareOfTheClickPressure() {
+        Settings settings;
+        auto extra = [&] {
+            for (const auto &[parameter, value] : settings.parameters())
+                if (parameter == "haptic_finger_extra")
+                    return value;
+            return -1;
+        };
+        // By default a second finger doubles what a click takes.
+        QCOMPARE(extra(), 120);
+        settings.set("press", 60);
+        QCOMPARE(extra(), 60);
+        settings.set("fingerPercent", 50);
+        QCOMPARE(extra(), 30);
+        settings.set("fingerPercent", 0);
+        QCOMPARE(extra(), 0);
+    }
+
     void forceClickHoldsOnlyAKeyItHas() {
         Settings settings;
         settings.set("forceKey", 30);  // the letter A: not one to hold down
@@ -437,7 +455,7 @@ private slots:
         const QString module = fakeModule(dir.path(), true, false);
         const Driver driver(module);
         Settings settings;
-        settings.set("fingerExtra", 40);
+        settings.set("fingerPercent", 40);
         QVERIFY(driver.apply(settings).isEmpty());
         QVERIFY(driver.outdated(settings));
         QCOMPARE(driver.read("haptic_press_threshold"), 120);
@@ -594,8 +612,8 @@ private slots:
         Backend backend;
         for (int i = 0; i < 4000; ++i)
             backend.addSample(100 + i * .01, 40, 1, false);
-        QVERIFY(backend.samples().first().t > 100 + 39.99 - 15);
-        QVERIFY(backend.samples().size() < 1600);
+        QVERIFY(backend.samples().first().t > 100 + 39.99 - 23);
+        QVERIFY(backend.samples().size() < 2400);
     }
 
     void percentilePicksFromTheSortedValues() {

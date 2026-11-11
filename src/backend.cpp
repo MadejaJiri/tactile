@@ -11,7 +11,7 @@
 #include "clock.h"
 
 namespace {
-constexpr double HistorySeconds = 14;
+constexpr double HistorySeconds = 22;
 // Changing how the click feels plays it once, so the keyboard alone is
 // enough to tune it. With a finger on the pad the next real click shows it.
 const QStringList pressFeel{"strength", "softness", "pressPulses", "releasePulses", "pulseGap"};
@@ -42,8 +42,8 @@ Backend::Backend(bool demo, QObject *parent) : QObject(parent), m_demo(demo) {
                    {"tunes", QJsonArray::fromStringList(Tunes::names())}};
         // Start with a window's worth of history, so the first frame already
         // shows what the chart is for.
-        m_demoStart = monotonicSeconds() - 8;
-        for (double phase = 0; phase < 8; phase += .01) {
+        m_demoStart = monotonicSeconds() - 16;
+        for (double phase = 0; phase < 16; phase += .01) {
             const Sample s = demoSample(phase);
             addSample(m_demoStart + phase, s.pressure, s.fingers, s.button);
         }
