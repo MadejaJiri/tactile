@@ -34,8 +34,14 @@ click instead of a broken trackpad.
 
 ## Install
 
-On Omarchy or another Arch-based system on Apple Silicon, with the headers of
-your running kernel installed (`linux-aurora-headers` or `linux-asahi-headers`):
+For an Apple Silicon MacBook running [Omarchy](https://omarchy.org), or
+another Arch-based system on its linux-aurora kernel. One line in a terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/MadejaJiri/tactile/main/get.sh | bash
+```
+
+Or the same by hand, if you would rather read what you run:
 
 ```sh
 git clone https://github.com/MadejaJiri/tactile
@@ -43,13 +49,24 @@ cd tactile
 ./install.sh
 ```
 
-`install.sh` builds the package, installs it with `pacman`, starts the service,
-and checks that the driver is built for your kernel and is in the boot image.
-It asks for your password through `sudo` and tells you what did not work, if
+Either way `install.sh` builds the package, installs it with `pacman`, starts
+the service, and checks that the driver is built for your kernel and is in the
+boot image. It asks for your password through `sudo` a few times, asks before
+it switches the trackpad's driver, and tells you what did not work, if
 anything. Then open **Tactile** from the launcher (`Super + Space`).
+
+It needs the headers of your running kernel (`linux-aurora-headers`) and the
+usual build tools; if something is missing it stops and names the package.
+The click this builds on exists only in linux-aurora so far: on another
+kernel, such as Asahi's own, the driver declines to build and your trackpad
+stays exactly as it was. Running the same line again later updates
+Tactile.
 
 To remove it: `sudo pacman -R tactile`, then reboot. The kernel's own driver is
 back and nothing else is left behind except your settings in `/var/lib/tactile`.
+
+Coding agents: [AGENTS.md](AGENTS.md) has the steps, the checks, and what to
+leave to the person at the keyboard.
 
 ## The window
 

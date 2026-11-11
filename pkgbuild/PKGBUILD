@@ -10,8 +10,7 @@ url="https://github.com/MadejaJiri/tactile"
 license=('MIT' 'GPL-2.0-or-later')
 depends=('dkms' 'pahole' 'qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-wayland')
 makedepends=('gcc' 'make')
-optdepends=('linux-aurora-headers: build the driver for the linux-aurora kernel'
-            'linux-asahi-headers: build the driver for the linux-asahi kernel')
+optdepends=('linux-aurora-headers: build the driver for the linux-aurora kernel')
 install=tactile.install
 source=()
 sha256sums=()

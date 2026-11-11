@@ -20,9 +20,15 @@ PROBLEMS=0
 [ "$(id -u)" != 0 ] || die "run this as yourself, not as root; it asks for sudo when it needs it."
 [ "$(uname -m)" = aarch64 ] || die "Tactile is for Apple Silicon MacBooks (this machine is $(uname -m))."
 command -v makepkg >/dev/null 2>&1 || die "this needs an Arch-based system (makepkg is missing)."
-command -v qmake6 >/dev/null 2>&1 || die "qmake6 is missing: sudo pacman -S --needed base-devel qt6-base qt6-declarative qt6-svg qt6-wayland"
-[ -e "/lib/modules/$KERNEL/build/Module.symvers" ] ||
-	die "the headers of the running kernel ($KERNEL) are missing. Install them (for example: sudo pacman -S linux-aurora-headers) and run this again. If the kernel was updated since the last boot, reboot first."
+for tool in qmake6 make g++; do
+	command -v "$tool" >/dev/null 2>&1 ||
+		die "$tool is missing: sudo pacman -S --needed base-devel qt6-base qt6-declarative qt6-svg qt6-wayland"
+done
+if [ ! -e "/lib/modules/$KERNEL/build/Module.symvers" ]; then
+	# The headers come in the package named after the kernel's own.
+	kernel_package="$(pacman -Qqo "/usr/lib/modules/$KERNEL/vmlinuz" 2>/dev/null || true)"
+	die "the headers of the running kernel ($KERNEL) are missing. Install them (sudo pacman -S ${kernel_package:-linux-aurora}-headers) and run this again. If the kernel was updated since the last boot, reboot first."
+fi
 [ -d /sys/module/hid_magicmouse ] ||
 	die "hid-magicmouse is not loaded, so this does not look like a MacBook with an Apple trackpad under Linux."
 
