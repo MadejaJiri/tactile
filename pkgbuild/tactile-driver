@@ -4,6 +4,12 @@
 #   tactile-driver status     what is installed, what is loaded
 #   tactile-driver reload     load the installed driver now (root)
 #   tactile-driver stock      the kernel's own driver until the next boot (root)
+#   tactile-driver repair     find the actuator again if it is missing (root)
+#
+# The actuator is the part under the trackpad that makes the click. On some
+# boots the controller does not list it, and then only the trackpad's firmware
+# can play the click. Probing the controller again brings it back; `repair`
+# does that, and Tactile runs it once at every boot.
 #
 # A reboot does the same as `reload`: Tactile's driver is the one the system
 # loads once DKMS has built it. Switching by hand pauses the keyboard and the
@@ -14,6 +20,7 @@ set -euo pipefail
 KERNEL="$(uname -r)"
 PARAMETERS=/sys/module/hid_magicmouse/parameters
 SPI=/sys/bus/spi/drivers/spi-hid-apple-of
+ACTUATOR=/sys/bus/hid/drivers/hid-apple-mtp-haptic
 # The kernel's own driver. While Tactile's is installed, DKMS keeps it in its
 # archive and puts it back when Tactile is removed.
 STOCK="$(ls "/lib/modules/$KERNEL/kernel/drivers/hid/"hid-magicmouse.ko* \
@@ -22,6 +29,28 @@ STOCK="$(ls "/lib/modules/$KERNEL/kernel/drivers/hid/"hid-magicmouse.ko* \
 
 installed() {
 	modinfo -k "$KERNEL" -F filename hid_magicmouse 2>/dev/null || true
+}
+
+spi_device() {
+	[ -d "$SPI" ] || return 0
+	ls "$SPI" | grep -m1 -E '^spi[0-9]+\.[0-9]+$' || true
+}
+
+# The actuator is its own HID device beside the trackpad, with its own driver.
+has_actuator() {
+	ls "$ACTUATOR" 2>/dev/null | grep -q -E '^[0-9A-F]{4}:'
+}
+
+# Probe the SPI device again, so the driver starts from a freshly reset
+# controller. The keyboard is on the same device: whatever happens next, bind
+# it again.
+rebind() {
+	local device="$1"
+	trap 'echo "$device" >"$SPI/bind" 2>/dev/null || true' EXIT
+	echo "$device" >"$SPI/unbind"
+	sleep 2
+	echo "$device" >"$SPI/bind"
+	trap - EXIT
 }
 
 # The patched driver is told from the kernel's own by an option only it has.
@@ -63,6 +92,9 @@ status() {
 		;;
 	none) echo "running    hid-magicmouse is not loaded" ;;
 	esac
+	if [ -n "$(spi_device)" ] && ! has_actuator; then
+		echo "actuator   not found at this boot, so the firmware plays the click: sudo tactile-driver repair"
+	fi
 	if command -v dkms >/dev/null 2>&1; then
 		echo "dkms       $(dkms status tactile 2>/dev/null | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
 	fi
@@ -99,9 +131,7 @@ swap() {
 	local want="$1" device=""
 	echo "$MARK" >/dev/kmsg 2>/dev/null || true
 
-	if [ -d "$SPI" ]; then
-		device="$(ls "$SPI" | grep -m1 -E '^spi[0-9]+\.[0-9]+$' || true)"
-	fi
+	device="$(spi_device)"
 
 	rmmod hid_magicmouse 2>/dev/null || true
 	if [ -d /sys/module/hid_magicmouse ]; then
@@ -116,16 +146,7 @@ swap() {
 		want=failed
 	fi
 
-	if [ -n "$device" ]; then
-		# Probe the SPI device again, so the driver starts from a freshly
-		# reset controller. The keyboard is on the same device: whatever
-		# happens next, bind it again.
-		trap 'echo "$device" >"$SPI/bind" 2>/dev/null || true' EXIT
-		echo "$device" >"$SPI/unbind"
-		sleep 2
-		echo "$device" >"$SPI/bind"
-		trap - EXIT
-	fi
+	[ -z "$device" ] || rebind "$device"
 	[ "$want" != failed ] || exit 1
 }
 
@@ -188,13 +209,42 @@ stock() {
 	echo "OK: the kernel's own driver is loaded until the next boot; the trackpad's firmware plays the click."
 }
 
+repair() {
+	need_root repair
+	local device try i
+	device="$(spi_device)"
+	if [ -z "$device" ]; then
+		echo "Nothing to do: the trackpad is not on the SPI controller here."
+		return
+	fi
+	if has_actuator; then
+		echo "OK: the actuator is there."
+		return
+	fi
+	# A few tries and no more: every one pauses the keyboard for two seconds.
+	for try in 1 2 3; do
+		echo "The actuator is missing; probing the trackpad's controller again ($try/3)..."
+		rebind "$device"
+		for i in $(seq 1 20); do
+			sleep 0.25
+			if has_actuator; then
+				echo "OK: the actuator is back. The driver takes the click once nothing touches the pad."
+				return
+			fi
+		done
+	done
+	echo "tactile-driver: the actuator did not show up; the trackpad's firmware keeps playing the click." >&2
+	exit 1
+}
+
 case "${1:-status}" in
 status) status ;;
 reload) reload ;;
 stock) stock ;;
--h | --help | help) sed -n '2,11s/^# \{0,1\}//p' "$0" ;;
+repair) repair ;;
+-h | --help | help) sed -n '2,17s/^# \{0,1\}//p' "$0" ;;
 *)
-	echo "tactile-driver: unknown command \"$1\" (status, reload, stock)" >&2
+	echo "tactile-driver: unknown command \"$1\" (status, reload, stock, repair)" >&2
 	exit 1
 	;;
 esac

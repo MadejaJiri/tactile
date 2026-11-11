@@ -84,6 +84,8 @@ QString Backend::problem() const {
         return "stock";
     if (!m_state.value("trackpad").toBool())
         return "notrackpad";
+    if (owner() == "noactuator")
+        return "noactuator";
     if (owner() == "failed")
         return "failed";
     if (!errors().isEmpty())

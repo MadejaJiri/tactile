@@ -73,6 +73,9 @@ bool report(const QJsonObject &state) {
                                "until Tactile's is (sudo tactile-driver reload, or reboot)." << Qt::endl;
     else if (state.value("module").toString() == "missing")
         QTextStream(stderr) << "tactile: saved, but no trackpad driver is loaded." << Qt::endl;
+    else if (state.value("owner").toString() == "noactuator")
+        QTextStream(stderr) << "tactile: the trackpad's actuator was not found at this boot, so its firmware still "
+                               "plays the click (sudo tactile-driver repair)." << Qt::endl;
     else if (state.value("owner").toString() == "failed")
         QTextStream(stderr) << "tactile: the trackpad refused to hand over the click; its firmware still plays it."
                             << Qt::endl;
@@ -103,6 +106,8 @@ int status(bool json) {
     out() << "trackpad " << (state.value("trackpad").toBool() ? "found" : "not found") << "\n";
     out() << "click    " << (owner == "host" ? "played by the driver"
                              : owner == "failed" ? "played by the firmware (the trackpad refused the driver)"
+                             : owner == "noactuator"
+                                 ? "played by the firmware (the actuator was not found at this boot: sudo tactile-driver repair)"
                                                  : "played by the trackpad's firmware")
           << "\n";
     const QString preset = state.value("preset").toString();

@@ -28,8 +28,10 @@ ApplicationWindow {
 
     readonly property string serviceCommand: "sudo systemctl enable --now tactiled"
     readonly property string driverCommand: "sudo tactile-driver reload"
+    readonly property string repairCommand: "sudo tactile-driver repair"
     readonly property string problemCommand: backend.problem === "daemon" ? serviceCommand
-                                           : backend.problem === "stock" ? driverCommand : ""
+                                           : backend.problem === "stock" ? driverCommand
+                                           : backend.problem === "noactuator" ? repairCommand : ""
     readonly property string problemText: {
         switch (backend.problem) {
         case "daemon": return qsTr("Tactile's service is not running. Start it with: %1").arg(serviceCommand)
@@ -37,6 +39,7 @@ ApplicationWindow {
         case "missing": return qsTr("The trackpad driver (hid-magicmouse) is not loaded.")
         case "stock": return qsTr("The kernel's own trackpad driver is loaded, so the settings below are saved but not in effect. Load Tactile's driver with: %1").arg(driverCommand)
         case "notrackpad": return qsTr("No Apple trackpad found.")
+        case "noactuator": return qsTr("The trackpad's actuator, the part that makes the click, was not found at this boot, so the firmware still plays the click. Find it again with: %1").arg(repairCommand)
         case "failed": return qsTr("The trackpad refused to hand over the click, so its firmware still plays it. Lift your fingers and try again.")
         case "errors": return qsTr("The driver refused: %1").arg(backend.errors.join("; "))
         }

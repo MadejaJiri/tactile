@@ -301,6 +301,9 @@ private slots:
         QCOMPARE(Daemon::ownerFrom("4,902,3,-;magicmouse spi0.0: cannot switch the actuator to host-controlled mode "
                                    "(-5); its firmware keeps the click feedback"),
                  QString("failed"));
+        QCOMPARE(Daemon::ownerFrom("4,902,3,-;magicmouse spi0.0: cannot switch the actuator to host-controlled mode "
+                                   "(-19); its firmware keeps the click feedback"),
+                 QString("noactuator"));
         QCOMPARE(Daemon::ownerFrom("6,903,4,-;usb 1-1: click feedback is host-driven"), QString());
         QCOMPARE(Daemon::ownerFrom("6,904,5,-;magicmouse spi0.0: input registered"), QString());
     }

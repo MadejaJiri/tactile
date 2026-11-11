@@ -5,6 +5,7 @@
   "The kernel's own trackpad driver is loaded, so the settings below are saved but not in effect. Load Tactile's driver with: %1": "Je načtený původní ovladač trackpadu z jádra, takže nastavení níže se ukládá, ale neprojeví se. Ovladač Tactile načtete příkazem: %1",
   "No Apple trackpad found.": "Nenašel se žádný trackpad Apple.",
   "The trackpad refused to hand over the click, so its firmware still plays it. Lift your fingers and try again.": "Trackpad odmítl předat klik, takže ho dál přehrává jeho firmware. Zvedněte prsty a zkuste to znovu.",
+  "The trackpad's actuator, the part that makes the click, was not found at this boot, so the firmware still plays the click. Find it again with: %1": "Aktuátor trackpadu, tedy část, která dělá klik, se při tomto startu nenašel, takže klik dál přehrává firmware. Najdete ho znovu příkazem: %1",
   "The driver refused: %1": "Ovladač odmítl: %1",
   "Not connected": "Nepřipojeno",
   "The driver plays the click": "Klik přehrává ovladač",

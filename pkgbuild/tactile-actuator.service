@@ -1,0 +1,12 @@
+[Unit]
+Description=Tactile: find the trackpad's actuator if this boot missed it
+Documentation=https://github.com/MadejaJiri/tactile
+# On some boots the trackpad's controller does not list the actuator, and the
+# driver then has nothing to play the click with. This looks once per boot and
+# probes the controller again if so; it does nothing when the actuator is there.
+Before=tactiled.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/tactile-driver repair

@@ -2,7 +2,7 @@
 
 pkgname=tactile
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="A light, tunable trackpad click with haptic feedback for Apple Silicon MacBooks: driver, service, and settings app"
 arch=('aarch64')
 url="https://github.com/MadejaJiri/tactile"
@@ -28,6 +28,7 @@ package() {
   install -Dm755 build/daemon/tactiled "$pkgdir/usr/bin/tactiled"
   install -Dm755 "$startdir/tactile-driver" "$pkgdir/usr/bin/tactile-driver"
   install -Dm644 "$startdir/tactiled.service" "$pkgdir/usr/lib/systemd/system/tactiled.service"
+  install -Dm644 "$startdir/tactile-actuator.service" "$pkgdir/usr/lib/systemd/system/tactile-actuator.service"
 
   # The driver travels as source. DKMS builds it for every installed kernel,
   # and again for each new one, from /usr/src/<name>-<version>.

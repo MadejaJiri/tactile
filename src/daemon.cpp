@@ -122,6 +122,10 @@ QString Daemon::ownerFrom(const QByteArray &record) {
         return {};
     if (record.contains("click feedback is host-driven") || record.contains("already host-controlled"))
         return "host";
+    // -19 is "no such device": the actuator never showed up next to the
+    // trackpad, which asking again does not cure; probing the controller does.
+    if (record.contains("cannot switch the actuator to host-controlled mode (-19)"))
+        return "noactuator";
     if (record.contains("cannot switch the actuator to host-controlled"))
         return "failed";
     // A freshly bound trackpad clicks by itself until the driver takes over.

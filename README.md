@@ -105,7 +105,14 @@ Each takes `--json` and exits 0 or 1. None needs `sudo`.
 tactile-driver status          # which driver is installed and which is loaded
 sudo tactile-driver reload     # load Tactile's driver now, without a reboot
 sudo tactile-driver stock      # the kernel's own driver until the next boot
+sudo tactile-driver repair     # find the actuator again if a boot missed it
 ```
+
+On the machine above, about every other boot the trackpad's controller does not
+list the actuator, the part that makes the click, with or without Tactile.
+The firmware still clicks then, but the driver has nothing to play its own
+click with. Probing the controller again brings the actuator back, so Tactile
+checks once at every boot and does that if needed (`tactile-actuator.service`).
 
 Switching drivers by hand pauses the keyboard and the trackpad for about two
 seconds, because both sit behind the same controller.
