@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Tactile
+Name[cs]=Tactile
+Comment=Set how the trackpad clicks and feels
+Comment[cs]=Nastavení kliku a odezvy trackpadu
+Exec=tactile
+Icon=tactile
+Terminal=false
+Categories=Settings;HardwareSettings;Utility;
+Keywords=trackpad;touchpad;click;haptic;pressure;force;
+Keywords[cs]=trackpad;touchpad;klik;odezva;tlak;
+StartupWMClass=tactile

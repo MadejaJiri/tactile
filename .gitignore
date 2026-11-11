@@ -1,0 +1,12 @@
+/build/
+/pkgbuild/pkg/
+/pkgbuild/src/
+*.pkg.tar.*
+/driver/*.ko
+/driver/*.o
+/driver/*.mod
+/driver/*.mod.c
+/driver/.*.cmd
+/driver/modules.order
+/driver/Module.symvers
+/driver/.stock.params

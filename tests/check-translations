@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Fails when a catalog misses a string the app shows, or keeps one it no longer does."""
+import glob, json, os, re, sys
+
+root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
+used = set()
+for path in glob.glob(os.path.join(root, "*.qml")) + glob.glob(os.path.join(root, "*.cpp")):
+    for match in re.finditer(r'\b(?:qsTr|tr)\(\s*"((?:[^"\\]|\\.)*)"', open(path).read()):
+        used.add(match.group(1).replace('\\"', '"'))
+
+failed = False
+for path in sorted(glob.glob(os.path.join(root, "i18n", "*.json"))):
+    name = os.path.basename(path)
+    if name == "en.json":
+        continue
+    catalog = json.load(open(path))
+    for key in sorted(used - set(catalog)):
+        print(f"{name}: missing: {key}")
+        failed = True
+    for key in sorted(set(catalog) - used):
+        print(f"{name}: unused: {key}")
+        failed = True
+    for key, value in catalog.items():
+        if isinstance(value, str) and sorted(re.findall(r"%\d", key)) != sorted(re.findall(r"%\d", value)):
+            print(f"{name}: placeholders differ: {key}")
+            failed = True
+sys.exit(1 if failed else 0)

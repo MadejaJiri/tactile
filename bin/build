@@ -1,0 +1,18 @@
+#!/bin/sh
+# Builds the settings app into build/tactile and its service into
+# build/daemon/tactiled.
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+mkdir -p "$ROOT/build" "$ROOT/build/daemon"
+
+cd "$ROOT/build"
+qmake6 "$ROOT/tactile.pro"
+make -j"$(nproc)"
+
+cd "$ROOT/build/daemon"
+qmake6 "$ROOT/tactiled.pro"
+make -j"$(nproc)"
+
+echo "Built $ROOT/build/tactile and $ROOT/build/daemon/tactiled"

@@ -1,0 +1,30 @@
+[Unit]
+Description=Tactile: trackpad click settings
+Documentation=https://github.com/MadejaJiri/tactile
+
+[Service]
+ExecStart=/usr/bin/tactiled
+Restart=on-failure
+RestartSec=2
+
+# Settings live in /var/lib/tactile, the socket in /run/tactile.
+StateDirectory=tactile
+RuntimeDirectory=tactile
+
+# It runs as root for three things only: the driver's options under
+# /sys/module, the trackpad's event device, and the kernel log. The rest of
+# the system is read-only to it and it has no network. /sys, /dev and the
+# kernel log must stay reachable, so the settings that hide those are left out.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectControlGroups=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

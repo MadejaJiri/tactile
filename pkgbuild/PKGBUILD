@@ -1,0 +1,46 @@
+# Maintainer: MadejaJiri <https://github.com/MadejaJiri>
+
+pkgname=tactile
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A light, tunable trackpad click with haptic feedback for Apple Silicon MacBooks: driver, service, and settings app"
+arch=('aarch64')
+url="https://github.com/MadejaJiri/tactile"
+# The app and the service are MIT; the kernel driver is GPL like the one it patches.
+license=('MIT' 'GPL-2.0-or-later')
+depends=('dkms' 'pahole' 'qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-wayland')
+makedepends=('gcc' 'make')
+optdepends=('linux-aurora-headers: build the driver for the linux-aurora kernel'
+            'linux-asahi-headers: build the driver for the linux-asahi kernel')
+install=tactile.install
+source=()
+sha256sums=()
+
+build() {
+  cd "$startdir/.."
+  ./bin/build
+}
+
+package() {
+  cd "$startdir/.."
+
+  install -Dm755 build/tactile "$pkgdir/usr/bin/tactile"
+  install -Dm755 build/daemon/tactiled "$pkgdir/usr/bin/tactiled"
+  install -Dm755 "$startdir/tactile-driver" "$pkgdir/usr/bin/tactile-driver"
+  install -Dm644 "$startdir/tactiled.service" "$pkgdir/usr/lib/systemd/system/tactiled.service"
+
+  # The driver travels as source. DKMS builds it for every installed kernel,
+  # and again for each new one, from /usr/src/<name>-<version>.
+  local src="$pkgdir/usr/src/$pkgname-$pkgver"
+  install -Dm644 -t "$src" driver/Makefile driver/hid-magicmouse.c driver/hid-haptic.h driver/hid-ids.h
+  install -Dm755 -t "$src" driver/abi-check.sh
+  install -Dm644 -t "$src/abi" driver/abi/hid-haptic.layout driver/abi/stock.params
+  sed "s/@VERSION@/$pkgver/" driver/dkms.conf > "$src/dkms.conf"
+  chmod 644 "$src/dkms.conf"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 driver/0001-hid-magicmouse-one-click-per-press.patch \
+    "$pkgdir/usr/share/doc/$pkgname/0001-hid-magicmouse-one-click-per-press.patch"
+  install -Dm644 "$startdir/tactile.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/tactile.svg"
+  install -Dm644 "$startdir/tactile.desktop" "$pkgdir/usr/share/applications/tactile.desktop"
+}

@@ -1,0 +1,747 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Controls.Material
+import QtQuick.Layouts
+import Tactile
+
+ApplicationWindow {
+    id: win
+    width: 1180
+    height: 940
+    minimumWidth: 760
+    minimumHeight: 540
+    visible: true
+    title: "Tactile"
+    color: "#0e0e10"
+
+    Material.theme: Material.Dark
+    Material.accent: theme.accent
+    Material.roundedScale: theme.radius
+
+    property bool helpVisible: false
+    readonly property bool calibrating: backend.calibrationStep !== Backend.Idle
+    // Whether the driver plays the click, which is what every setting below
+    // the presets is about.
+    readonly property bool hostClick: backend.settings.hostClick === 1
+    readonly property bool forceClick: hostClick && backend.settings.forceClick === 1
+    readonly property bool idle: !calibrating && !helpVisible
+
+    readonly property string serviceCommand: "sudo systemctl enable --now tactiled"
+    readonly property string driverCommand: "sudo tactile-driver reload"
+    readonly property string problemCommand: backend.problem === "daemon" ? serviceCommand
+                                           : backend.problem === "stock" ? driverCommand : ""
+    readonly property string problemText: {
+        switch (backend.problem) {
+        case "daemon": return qsTr("Tactile's service is not running. Start it with: %1").arg(serviceCommand)
+        case "refused": return qsTr("The service only listens to the user sitting at this computer.")
+        case "missing": return qsTr("The trackpad driver (hid-magicmouse) is not loaded.")
+        case "stock": return qsTr("The kernel's own trackpad driver is loaded, so the settings below are saved but not in effect. Load Tactile's driver with: %1").arg(driverCommand)
+        case "notrackpad": return qsTr("No Apple trackpad found.")
+        case "failed": return qsTr("The trackpad refused to hand over the click, so its firmware still plays it. Lift your fingers and try again.")
+        case "errors": return qsTr("The driver refused: %1").arg(backend.errors.join("; "))
+        }
+        return ""
+    }
+
+    function num(value) {
+        // Read so the bindings that call this re-render on a language switch.
+        translator.language
+        return Number(value).toLocaleString(Qt.locale(), 'f', 0)
+    }
+
+    Shortcut { sequence: "?"; context: Qt.ApplicationShortcut; enabled: !win.calibrating; onActivated: win.helpVisible = !win.helpVisible }
+    Shortcut { sequence: "Q"; context: Qt.ApplicationShortcut; onActivated: Qt.quit() }
+    Shortcut { sequence: "Space"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.testClick("press") }
+    Shortcut { sequences: [StandardKey.Undo]; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.undo() }
+    Shortcut { sequences: [StandardKey.Redo]; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.redo() }
+    Shortcut { sequence: "1"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.applyPreset("light") }
+    Shortcut { sequence: "2"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.applyPreset("medium") }
+    Shortcut { sequence: "3"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.applyPreset("firm") }
+    Shortcut { sequence: "4"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.applyPreset("firmware") }
+    Shortcut { sequence: "["; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.nudge(-1) }
+    Shortcut { sequence: "]"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.nudge(1) }
+    Shortcut { sequence: "C"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.startCalibration() }
+    Shortcut { sequence: "F"; context: Qt.ApplicationShortcut; enabled: win.idle && win.hostClick; onActivated: backend.toggle("forceClick") }
+    Shortcut { sequence: "R"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.reset() }
+    Shortcut { sequence: "P"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.paused = !backend.paused }
+    Shortcut {
+        sequences: ["Return", "Enter"]
+        context: Qt.ApplicationShortcut
+        enabled: backend.calibrationStep === Backend.Done
+        onActivated: backend.closeCalibration()
+    }
+    Shortcut {
+        sequence: "Escape"
+        context: Qt.ApplicationShortcut
+        enabled: win.calibrating || win.helpVisible
+        onActivated: {
+            if (backend.calibrationStep === Backend.Done)
+                backend.closeCalibration()
+            else if (win.calibrating)
+                backend.cancelCalibration()
+            else
+                win.helpVisible = false
+        }
+    }
+
+    component Readout: ColumnLayout {
+        property string label
+        property string value
+        property bool big: false
+
+        spacing: 0
+        Label {
+            text: parent.label
+            color: "#9a9aa3"
+            font.pixelSize: 12
+        }
+        Label {
+            text: parent.value
+            color: "#ececef"
+            font.pixelSize: parent.big ? 40 : 22
+            font.bold: parent.big
+            // Digits of one width, so a changing number does not shake the row.
+            font.features: { "tnum": 1 }
+        }
+    }
+
+    component PresetButton: ActionButton {
+        property string name
+
+        primary: backend.preset === name
+        implicitWidth: Math.max(96, contentItem.implicitWidth + 30)
+        onClicked: backend.applyPreset(name)
+    }
+
+    component Key: Rectangle {
+        property string text
+
+        implicitWidth: Math.max(26, keyLabel.implicitWidth + 14)
+        implicitHeight: 24
+        radius: Math.min(4, theme.radius)
+        color: "#232328"
+        border.color: "#3a3a42"
+        Label {
+            id: keyLabel
+            anchors.centerIn: parent
+            text: parent.text
+            color: "#ececef"
+            font.pixelSize: 12
+        }
+    }
+
+    // Right-to-left languages mirror the window; the Translator sets the
+    // application's layout direction.
+    Item {
+        anchors.fill: parent
+        LayoutMirroring.enabled: Qt.application.layoutDirection === Qt.RightToLeft
+        LayoutMirroring.childrenInherit: true
+
+        Flickable {
+            id: page
+            anchors.fill: parent
+            contentWidth: width
+            contentHeight: Math.max(height, column.implicitHeight + 40)
+            boundsBehavior: Flickable.StopAtBounds
+            clip: true
+            ScrollBar.vertical: ScrollBar {}
+
+            ColumnLayout {
+                id: column
+                x: 20
+                y: 20
+                width: page.width - 40
+                // At least the window's height, so the chart takes what the
+                // settings leave; taller, and the page scrolls.
+                height: Math.max(implicitHeight, page.height - 40)
+                spacing: 12
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+
+                    Label {
+                        text: "Tactile"
+                        color: "#ececef"
+                        font.pixelSize: 22
+                        font.bold: true
+                    }
+                    Rectangle {
+                        width: 8
+                        height: 8
+                        radius: 4
+                        Layout.leftMargin: 4
+                        color: backend.problem === "" && win.hostClick ? theme.accent : "#6c6c75"
+                    }
+                    Label {
+                        text: !backend.connected ? qsTr("Not connected")
+                            : backend.problem === "" && win.hostClick ? qsTr("The driver plays the click")
+                            : qsTr("The trackpad's firmware plays the click")
+                        color: "#9a9aa3"
+                        font.pixelSize: 14
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    Label {
+                        text: qsTr("Press ? for shortcuts")
+                        color: "#6c6c75"
+                        font.pixelSize: 12
+                    }
+                }
+
+                Rectangle {
+                    visible: backend.problem !== ""
+                    color: "#2a2110"
+                    border.color: "#5c4514"
+                    radius: theme.radius
+                    implicitHeight: bannerRow.implicitHeight + 20
+                    Layout.fillWidth: true
+
+                    RowLayout {
+                        id: bannerRow
+                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
+                        spacing: 12
+
+                        Label {
+                            text: win.problemText
+                            color: "#f5dba8"
+                            font.pixelSize: 14
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
+                        ActionButton {
+                            visible: win.problemCommand !== ""
+                            text: qsTr("Copy command")
+                            quiet: true
+                            onClicked: backend.copy(win.problemCommand)
+                        }
+                        ActionButton {
+                            visible: backend.problem === "failed"
+                            text: qsTr("Try again")
+                            quiet: true
+                            onClicked: backend.retry()
+                        }
+                    }
+                }
+
+                Rectangle {
+                    id: chartCard
+                    color: "#17171a"
+                    border.color: "#26262b"
+                    radius: theme.radius
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 320
+                    Layout.preferredHeight: 360
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 18
+                        spacing: 6
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 32
+
+                            Readout {
+                                label: qsTr("Pressure")
+                                value: win.num(backend.pressure)
+                                big: true
+                                Layout.minimumWidth: 108
+                            }
+                            Readout {
+                                label: qsTr("Last click")
+                                value: backend.lastPeak > 0 ? win.num(backend.lastPeak) : "–"
+                                Layout.alignment: Qt.AlignBottom
+                                Layout.bottomMargin: 6
+                            }
+                            Readout {
+                                label: qsTr("Typical click")
+                                value: backend.typical > 0 ? win.num(backend.typical) : "–"
+                                Layout.alignment: Qt.AlignBottom
+                                Layout.bottomMargin: 6
+                            }
+                            Readout {
+                                label: qsTr("Fingers")
+                                value: win.num(backend.fingers)
+                                Layout.alignment: Qt.AlignBottom
+                                Layout.bottomMargin: 6
+                            }
+                            Readout {
+                                label: qsTr("Clicks")
+                                value: win.num(backend.clickCount)
+                                Layout.alignment: Qt.AlignBottom
+                                Layout.bottomMargin: 6
+                            }
+                            Label {
+                                // How the presses compare with what a click
+                                // needs: the one thing the numbers alone do
+                                // not say.
+                                readonly property real ratio: backend.typical / Math.max(1, backend.settings.press ?? 1)
+                                visible: win.hostClick && backend.typical > 0
+                                text: {
+                                    translator.language
+                                    return ratio >= 1.5
+                                        ? qsTr("You press about %1× harder than a click needs.").arg(ratio.toLocaleString(Qt.locale(), 'f', 1))
+                                        : qsTr("Your presses end close to the click pressure.")
+                                }
+                                color: "#9a9aa3"
+                                font.pixelSize: 13
+                                wrapMode: Text.WordWrap
+                                horizontalAlignment: Text.AlignRight
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignBottom
+                                Layout.bottomMargin: 8
+                            }
+                            Item {
+                                visible: !(win.hostClick && backend.typical > 0)
+                                Layout.fillWidth: true
+                            }
+                            ActionButton {
+                                text: backend.paused ? qsTr("Resume") : qsTr("Pause")
+                                quiet: true
+                                Layout.alignment: Qt.AlignBottom
+                                onClicked: backend.paused = !backend.paused
+                            }
+                        }
+
+                        PressureChart {
+                            id: plot
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            source: backend
+                            accent: theme.accent
+                            surface: chartCard.color
+                            corner: Math.min(4, theme.radius)
+                            nowLabel: qsTr("now")
+                            hoverX: hover.hovered ? hover.point.position.x : -1
+
+                            HoverHandler { id: hover }
+
+                            // Read the size so the lines follow a resize.
+                            readonly property real pressY: { width; height; return yFor(backend.settings.press ?? 0) }
+                            readonly property real releaseY: { width; height; return yFor(backend.settings.release ?? 0) }
+                            readonly property real forceY: { width; height; return yFor(backend.settings.force ?? 0) }
+                            readonly property real handleX: width - gutter + 8
+
+                            // The click and release lines can run a few
+                            // pixels apart, so one label sits on its line and
+                            // the other hangs under it; the Force Click label
+                            // keeps clear of both.
+                            ChartHandle {
+                                id: pressHandle
+                                visible: win.hostClick
+                                key: "press"
+                                label: qsTr("Click %1").arg(win.num(backend.settings.press ?? 0))
+                                chart: plot
+                                lineY: plot.pressY
+                                x: plot.handleX
+                                y: plot.pressY - height
+                            }
+                            ChartHandle {
+                                visible: win.hostClick
+                                key: "release"
+                                label: qsTr("Release %1").arg(win.num(backend.settings.release ?? 0))
+                                chart: plot
+                                lineY: plot.releaseY
+                                x: plot.handleX
+                                y: plot.releaseY
+                            }
+                            ChartHandle {
+                                visible: win.forceClick
+                                key: "force"
+                                label: qsTr("Force %1").arg(win.num(backend.settings.force ?? 0))
+                                chart: plot
+                                lineY: plot.forceY
+                                x: plot.handleX
+                                y: Math.min(plot.forceY - height, pressHandle.y - height - 2)
+                            }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    PresetButton { name: "light"; text: qsTr("Light") }
+                    PresetButton { name: "medium"; text: qsTr("Medium") }
+                    PresetButton { name: "firm"; text: qsTr("Firm") }
+                    PresetButton { name: "firmware"; text: qsTr("Firmware") }
+                    Label {
+                        text: backend.preset === "" ? qsTr("Custom") : ""
+                        color: "#9a9aa3"
+                        font.pixelSize: 13
+                        Layout.leftMargin: 6
+                    }
+                    Item { Layout.fillWidth: true }
+                    ActionButton {
+                        text: qsTr("Calibrate")
+                        enabled: backend.connected && backend.problem !== "stock"
+                        onClicked: backend.startCalibration()
+                    }
+                    ActionButton {
+                        text: qsTr("Test click")
+                        onClicked: backend.testClick("press")
+                    }
+                    ActionButton {
+                        text: qsTr("Reset")
+                        quiet: true
+                        onClicked: backend.reset()
+                    }
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: page.width >= 1000 ? 3 : page.width >= 660 ? 2 : 1
+                    columnSpacing: 12
+                    rowSpacing: 12
+                    uniformCellWidths: true
+
+                    SettingsCard {
+                        title: qsTr("Click")
+                        note: win.hostClick ? "" : qsTr("The trackpad's firmware plays the click at its own pressure. Pick Light, Medium or Firm to set it here.")
+
+                        SettingRow {
+                            key: "press"
+                            label: qsTr("Click pressure")
+                            hint: qsTr("How hard to press for a click. A resting finger reads 30 to 60.")
+                            enabled: win.hostClick
+                        }
+                        SettingRow {
+                            key: "release"
+                            label: qsTr("Release pressure")
+                            hint: qsTr("The click ends when the pressure falls below this.")
+                            enabled: win.hostClick
+                        }
+                        SettingRow {
+                            key: "debounce"
+                            label: qsTr("Bounce filter")
+                            unit: qsTr("ms")
+                            hint: qsTr("How long the pressure must stay low before the click ends, and before the next one can start.")
+                            enabled: win.hostClick
+                        }
+                    }
+
+                    SettingsCard {
+                        title: qsTr("Feedback")
+                        enabled: win.hostClick
+                        corner: ActionButton {
+                            text: qsTr("Feel it")
+                            quiet: true
+                            onClicked: backend.testClick("press")
+                        }
+
+                        SettingRow {
+                            key: "strength"
+                            label: qsTr("Strength")
+                            zeroMeans: backend.defaults.strength ?? 0
+                        }
+                        SettingRow {
+                            key: "softness"
+                            label: qsTr("Softness")
+                            zeroMeans: backend.defaults.softness ?? 0
+                            hint: qsTr("Shapes the pulse. Change it and feel the difference.")
+                        }
+                        SettingRow {
+                            key: "pressPulses"
+                            label: qsTr("Pulses on press")
+                            zeroText: qsTr("Silent")
+                        }
+                        SettingRow {
+                            key: "releasePulses"
+                            label: qsTr("Pulses on release")
+                        }
+                        SettingRow {
+                            key: "pulseGap"
+                            label: qsTr("Gap between pulses")
+                            unit: qsTr("ms")
+                        }
+                    }
+
+                    SettingsCard {
+                        id: forceCard
+                        // Its settings stay out of the way until it is on.
+                        readonly property bool on: backend.settings.forceClick === 1
+                        title: qsTr("Force Click")
+                        enabled: win.hostClick
+                        note: qsTr("Press harder for a second, deeper click you can feel. Apps do not get it as an event of its own.")
+                        corner: [
+                            ActionButton {
+                                text: qsTr("Feel it")
+                                quiet: true
+                                enabled: win.forceClick
+                                onClicked: backend.testClick("force")
+                            },
+                            Switch {
+                                checked: backend.settings.forceClick === 1
+                                focusPolicy: Qt.NoFocus
+                                onToggled: backend.set("forceClick", checked ? 1 : 0)
+                                Accessible.name: forceCard.title
+                            }
+                        ]
+
+                        SettingRow {
+                            key: "force"
+                            visible: forceCard.on
+                            label: qsTr("Pressure")
+                            enabled: win.forceClick
+                        }
+                        SettingRow {
+                            key: "forceRelease"
+                            visible: forceCard.on
+                            label: qsTr("Release pressure")
+                            enabled: win.forceClick
+                        }
+                        SettingRow {
+                            key: "forceStrength"
+                            visible: forceCard.on
+                            label: qsTr("Strength")
+                            zeroMeans: backend.defaults.forceStrength ?? 0
+                            enabled: win.forceClick
+                        }
+                        SettingRow {
+                            key: "forceSoftness"
+                            visible: forceCard.on
+                            label: qsTr("Softness")
+                            zeroMeans: backend.defaults.forceSoftness ?? 0
+                            enabled: win.forceClick
+                        }
+                        SettingRow {
+                            key: "forcePulses"
+                            visible: forceCard.on
+                            label: qsTr("Pulses")
+                            enabled: win.forceClick
+                        }
+                        SettingRow {
+                            key: "forceGap"
+                            visible: forceCard.on
+                            label: qsTr("Gap between pulses")
+                            unit: qsTr("ms")
+                            enabled: win.forceClick
+                        }
+                        RowLayout {
+                            visible: forceCard.on
+                            Layout.fillWidth: true
+                            enabled: win.forceClick
+                            spacing: 12
+
+                            Label {
+                                text: qsTr("The trackpad's own Force Click pulse")
+                                color: parent.enabled ? "#ececef" : "#6c6c75"
+                                font.pixelSize: 14
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
+                            Switch {
+                                checked: backend.settings.forceWaveform === 1
+                                focusPolicy: Qt.NoFocus
+                                onToggled: backend.set("forceWaveform", checked ? 1 : 0)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // What just happened, for a few seconds.
+        Rectangle {
+            visible: backend.notice !== "" && !win.calibrating
+            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 24 }
+            width: Math.min(parent.width - 48, noticeLabel.implicitWidth + 36)
+            height: noticeLabel.implicitHeight + 20
+            radius: theme.radius
+            color: "#2a2a30"
+            border.color: "#3a3a42"
+
+            Label {
+                id: noticeLabel
+                anchors { fill: parent; margins: 10; leftMargin: 18; rightMargin: 18 }
+                text: backend.notice
+                color: "#ececef"
+                font.pixelSize: 14
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+
+        // Calibration. While it measures, the driver holds the click back, so
+        // the pointer cannot press a button: the keyboard runs this.
+        Rectangle {
+            visible: win.calibrating
+            anchors.fill: parent
+            color: "#e60e0e10"
+
+            MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                onWheel: wheel => wheel.accepted = true
+            }
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: Math.min(parent.width - 48, 520)
+                height: calibration.implicitHeight + 56
+                radius: theme.radius
+                color: "#17171a"
+                border.color: "#26262b"
+
+                ColumnLayout {
+                    id: calibration
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 28 }
+                    spacing: 16
+
+                    Label {
+                        text: backend.calibrationStep === Backend.Glide ? qsTr("Step 1 of 2")
+                            : backend.calibrationStep === Backend.Press ? qsTr("Step 2 of 2")
+                            : qsTr("Calibrated")
+                        color: "#9a9aa3"
+                        font.pixelSize: 12
+                    }
+                    Label {
+                        text: backend.calibrationStep === Backend.Glide ? qsTr("Move one finger around the trackpad, as lightly as you normally do.")
+                            : backend.calibrationStep === Backend.Press ? qsTr("Now press five times, each as lightly as a click should be.")
+                            : qsTr("A click now takes a pressure of %1.").arg(win.num(backend.calibrationResult))
+                        color: "#ececef"
+                        font.pixelSize: 20
+                        font.bold: true
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+
+                    ProgressBar {
+                        visible: backend.calibrationStep === Backend.Glide
+                        value: backend.calibrationProgress
+                        Layout.fillWidth: true
+                    }
+
+                    RowLayout {
+                        visible: backend.calibrationStep === Backend.Press
+                        spacing: 10
+                        Repeater {
+                            model: 5
+                            Rectangle {
+                                required property int index
+                                width: 18
+                                height: 18
+                                radius: 9
+                                color: index < backend.calibrationPresses ? theme.accent : "transparent"
+                                border.color: index < backend.calibrationPresses ? theme.accent : "#4a4a52"
+                                border.width: 2
+                            }
+                        }
+                        Label {
+                            text: win.num(backend.pressure)
+                            color: "#9a9aa3"
+                            font.pixelSize: 14
+                            font.features: { "tnum": 1 }
+                            Layout.leftMargin: 10
+                        }
+                    }
+
+                    Label {
+                        text: backend.calibrationStep === Backend.Press
+                              ? qsTr("You will not feel a click while this measures. Lift your finger between presses.")
+                            : backend.calibrationStep === Backend.Done
+                              ? qsTr("Your finger rests at about %1 while it moves, and a click starts a little under your lightest press. Try it; Ctrl+Z brings the old pressure back.").arg(win.num(backend.calibrationGlide))
+                            : qsTr("This measures how heavily your finger rests, so that moving the pointer never clicks.")
+                        color: "#9a9aa3"
+                        font.pixelSize: 14
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+
+                    RowLayout {
+                        spacing: 8
+                        Key { text: backend.calibrationStep === Backend.Done ? "Enter" : "Esc" }
+                        Label {
+                            text: backend.calibrationStep === Backend.Done ? qsTr("Done") : qsTr("Cancel")
+                            color: "#9a9aa3"
+                            font.pixelSize: 13
+                        }
+                    }
+                }
+            }
+        }
+
+        // Every shortcut, on "?".
+        Rectangle {
+            visible: win.helpVisible
+            anchors.fill: parent
+            color: "#e60e0e10"
+
+            MouseArea {
+                anchors.fill: parent
+                onClicked: win.helpVisible = false
+                onWheel: wheel => wheel.accepted = true
+            }
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: Math.min(parent.width - 48, 460)
+                height: help.implicitHeight + 56
+                radius: theme.radius
+                color: "#17171a"
+                border.color: "#26262b"
+
+                ColumnLayout {
+                    id: help
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 28 }
+                    spacing: 10
+
+                    Label {
+                        text: qsTr("Shortcuts")
+                        color: "#ececef"
+                        font.pixelSize: 18
+                        font.bold: true
+                        Layout.bottomMargin: 6
+                    }
+
+                    Repeater {
+                        model: [
+                            { keys: ["1", "2", "3", "4"], what: qsTr("Light, Medium, Firm, Firmware") },
+                            { keys: ["[", "]"], what: qsTr("Lighter or firmer click") },
+                            { keys: ["Space"], what: qsTr("Play a test click") },
+                            { keys: ["C"], what: qsTr("Calibrate to your presses") },
+                            { keys: ["F"], what: qsTr("Force Click on or off") },
+                            { keys: ["P"], what: qsTr("Pause the chart") },
+                            { keys: ["R"], what: qsTr("Reset everything") },
+                            { keys: ["Ctrl", "Z"], what: qsTr("Undo") },
+                            { keys: ["Ctrl", "Shift", "Z"], what: qsTr("Redo") },
+                            { keys: ["?"], what: qsTr("Show or hide this") },
+                            { keys: ["Q"], what: qsTr("Quit") }
+                        ]
+                        RowLayout {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Label {
+                                text: modelData.what
+                                color: "#ececef"
+                                font.pixelSize: 14
+                                Layout.fillWidth: true
+                            }
+                            Repeater {
+                                model: modelData.keys
+                                Key {
+                                    required property string modelData
+                                    text: modelData
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        visible: backend.kernel !== ""
+                        text: qsTr("Tactile %1 on kernel %2").arg(Qt.application.version).arg(backend.kernel)
+                        color: "#6c6c75"
+                        font.pixelSize: 12
+                        Layout.topMargin: 10
+                    }
+                }
+            }
+        }
+    }
+}

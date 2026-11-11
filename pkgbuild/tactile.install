@@ -1,0 +1,29 @@
+post_install() {
+  cat <<'EOF'
+Tactile: the driver is built by DKMS at the end of this installation and is
+in use from the next boot. To finish:
+
+  sudo systemctl enable --now tactiled    keeps and applies the click settings
+  sudo tactile-driver reload              use the new driver now, without a reboot
+                                          (keyboard and trackpad pause for two seconds)
+
+Then open Tactile from the launcher, or run: tactile status
+EOF
+}
+
+post_upgrade() {
+  # The unit file may have changed along with the binary it starts.
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl try-restart tactiled.service 2>/dev/null || true
+}
+
+pre_remove() {
+  systemctl disable --now tactiled.service 2>/dev/null || true
+}
+
+post_remove() {
+  cat <<'EOF'
+Tactile: removed. The kernel's own trackpad driver is back from the next boot.
+The saved settings stay in /var/lib/tactile.
+EOF
+}

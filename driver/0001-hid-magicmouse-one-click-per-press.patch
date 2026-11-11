@@ -1,0 +1,744 @@
+HID: magicmouse: one click per press on Apple SPI trackpads that hide report 0x21
+
+Base: omacom/linux-aurora @ 78742b7013, drivers/hid/hid-magicmouse.c
+Tested on: MacBook Pro 14" M1 Pro (apple,j314s), linux-aurora 7.2.11
+
+With haptic_press=1 the driver derives the click from the summed finger
+pressure and plays the click waveform itself. That only works if the
+actuator is first told to stop clicking on its own (feature report 0x21,
+"21 01" = host-controlled). On the J314 trackpad the actuator's HID
+descriptor declares only input 0x3f and output 0x53, so the taptic helper
+(hid-apple-mtp-haptic) decides the device has no mode report and returns
+without sending anything. The firmware keeps its own click, and a firm press
+vibrates twice: the driver's pulse at haptic_press_threshold and the
+firmware's at its fixed threshold (about 125 on this machine).
+
+The firmware does accept report 0x21 as a feature SET (not as an output
+report) and answers a feature GET of it, although neither is declared. So:
+
+- For SPI actuators whose descriptor lacks report 0x21, write the mode
+  directly as a feature report and verify it by reading it back. Every other
+  actuator still goes through apple_taptic_switch_modes() unchanged.
+- Switch modes from a delayed work item, only while the pad is idle, with
+  retries and backoff. Re-read the mode every 30 s of use and after a
+  controller reset or resume, and take it again if the firmware dropped it.
+- Exactly one click source at a time: the driver only plays waveforms and
+  derives the button while host mode is confirmed. Until then, and whenever
+  the switch fails, the firmware's own button and click are passed through.
+- Hand the click back to the firmware (21 00) on teardown, and once
+  haptic_press is turned off and userspace holds no force-feedback effect.
+- Debounce the derived click (haptic_debounce_ms, default 40): the actuator
+  shakes the pad, which made the pressure dip below the release threshold for
+  a few milliseconds and registered a second click.
+- haptic_trace logs every derived click transition and mode check.
+
+--- a/drivers/hid/hid-magicmouse.c
++++ b/drivers/hid/hid-magicmouse.c
+@@ -106,6 +106,22 @@
+ module_param(haptic_press_threshold, ushort, 0644);
+ MODULE_PARM_DESC(haptic_press_threshold, "summed finger pressure at which a click starts (default 120)");
+ 
++/*
++ * Local patch: debounce the host-derived click. A firm press makes the summed
++ * pressure jump and dip within a few milliseconds (the actuator shakes the
++ * pad), which released and re-pressed the button and registered as a double
++ * click. The click now only ends once the pressure has stayed at or below the
++ * release threshold for haptic_debounce_ms, and cannot start again within
++ * haptic_debounce_ms of ending.
++ */
++static u16 haptic_debounce_ms = 40;
++module_param(haptic_debounce_ms, ushort, 0644);
++MODULE_PARM_DESC(haptic_debounce_ms, "ms the pressure must stay low to end a click, and the gap before the next one (default 40)");
++
++static bool haptic_trace;
++module_param(haptic_trace, bool, 0644);
++MODULE_PARM_DESC(haptic_trace, "log every derived click transition to the kernel log (default off)");
++
+ static u16 haptic_release_threshold = 75;
+ module_param(haptic_release_threshold, ushort, 0644);
+ MODULE_PARM_DESC(haptic_release_threshold, "summed finger pressure at which a click ends (default 75)");
+@@ -273,12 +289,17 @@
+  * @taptic_hdev: Actuator HID device of an MTP trackpad, if resolved.
+  * @haptic_effects: Uploaded haptic effects of an MTP trackpad.
+  * @haptic_press_work: Plays the press waveform of a host-driven click.
+- * @haptic_release_work: Plays the release waveform, or hands the actuator back.
++ * @haptic_release_work: Plays the release waveform of a host-driven click.
+  * @haptic_deep_work: Plays the waveform of a deep click.
+  * @haptic_deep_release_work: Plays the release waveform on leaving a deep click.
++ * @haptic_mode_work: Puts the actuator in the mode click feedback needs while
++ *                    nothing touches the pad, and checks that it stays there.
+  * @force_input: Input device for the deep-click key, NULL if none.
+  * @haptic_button_down: The host-derived button is pressed.
+  * @haptic_deep_down: The host-derived click is in its deep stage.
++ * @haptic_touch_ns: Time of the last report with a finger on the pad.
++ * @haptic_mode_checked_ns: When the actuator last confirmed its mode.
++ * @haptic_mode_failures: Failed attempts to set the mode since it last worked.
+  * @hdev: Pointer to the underlying HID device.
+  * @work: Workqueue to handle initialization retry for quirky devices.
+  * @battery_timer: Timer for obtaining battery level information.
+@@ -313,9 +334,16 @@
+ 	struct work_struct haptic_release_work;
+ 	struct work_struct haptic_deep_work;
+ 	struct work_struct haptic_deep_release_work;
++	struct delayed_work haptic_mode_work;
+ 	struct input_dev *force_input;
+ 	bool haptic_button_down;
+ 	bool haptic_deep_down;
++	u64 haptic_low_since_ns;	/* pressure first fell to the release level */
++	u64 haptic_released_ns;		/* when the click last ended */
++	u64 haptic_touch_ns;
++	u64 haptic_mode_checked_ns;
++	u8 haptic_mode_failures;
++	u8 haptic_last_std_buttons;	/* trace only */
+ 
+ 	struct hid_device *hdev;
+ 	struct delayed_work work;
+@@ -940,7 +968,8 @@
+ }
+ 
+ static bool magicmouse_haptic_click(struct magicmouse_sc *msc, u32 pressure,
+-				    bool firmware_button);
++				    bool touching, bool firmware_button);
++static void magicmouse_haptic_forget_mode(struct magicmouse_sc *msc);
+ 
+ static void report_finger_data(struct input_dev *input, int slot,
+ 			       const struct input_mt_pos *pos,
+@@ -1035,7 +1064,7 @@
+ 	/* The C1FE report carries no pressure to derive a click from. */
+ 	input_report_key(input, BTN_MOUSE,
+ 			 msc->mtp_c1fe ? tp_hdr->buttons & 1 :
+-			 magicmouse_haptic_click(msc, pressure,
++			 magicmouse_haptic_click(msc, pressure, n > 0,
+ 						 tp_hdr->buttons & 1));
+ 
+ 	input_sync(input);
+@@ -1054,19 +1083,41 @@
+ 	if (data[0] == SPI_RESET_REPORT_ID) {
+ 		hid_info(hdev, "Touch controller was reset, re-enabling touch mode\n");
+ 		schedule_delayed_work(&msc->work, msecs_to_jiffies(10));
++		/* The actuator's mode may be gone with it: take it again. */
++		magicmouse_haptic_forget_mode(msc);
+ 		return 1;
+ 	}
+ 
+ 	if (data[0] != SPI_REPORT_ID || size < hdr_sz)
+ 		return 0;
+ 
+-	return magicmouse_raw_event_mtp(hdev, report, data + hdr_sz, size - hdr_sz);
++	{
++		int ret = magicmouse_raw_event_mtp(hdev, report, data + hdr_sz, size - hdr_sz);
++
++		if (haptic_trace && (ret == 0 || (data[1] & 7) != msc->haptic_last_std_buttons))
++			hid_info(hdev, "std report buttons=%x (was %x) mtp_ret=%d size=%d\n",
++				 data[1] & 7, msc->haptic_last_std_buttons, ret, size);
++		msc->haptic_last_std_buttons = data[1] & 7;
++		return ret;
++	}
+ }
+ 
+ static int magicmouse_event(struct hid_device *hdev, struct hid_field *field,
+ 		struct hid_usage *usage, __s32 value)
+ {
+ 	struct magicmouse_sc *msc = hid_get_drvdata(hdev);
++
++	/*
++	 * Local patch: while the host derives the click, the firmware's own button
++	 * bit in the standard mouse report must not reach hidinput, or it adds a
++	 * second click (and a second one on release) on firm presses.
++	 */
++	if (msc->haptics && usage->type == EV_KEY && usage->code >= BTN_LEFT && usage->code <= BTN_MIDDLE &&
++	    (haptic_press || READ_ONCE(msc->haptics->mode) == HID_HAPTIC_MODE_HOST)) {
++		if (haptic_trace)
++			hid_info(hdev, "swallowed generic button %x=%d\n", usage->code, value);
++		return 1;
++	}
+ 	if ((msc->input->id.product == USB_DEVICE_ID_APPLE_MAGICMOUSE2 ||
+ 	     msc->input->id.product == USB_DEVICE_ID_APPLE_MAGICMOUSE2_USBC) &&
+ 	    field->report->id == MOUSE2_REPORT_ID) {
+@@ -1443,6 +1494,104 @@
+ 	return msc->taptic_hdev;
+ }
+ 
++/*
++ * Who plays the click is feature report 0x21 of the actuator: 0 its firmware,
++ * 1 the host.
++ *
++ * The SPI actuator of the 14" M1 Pro (J314) leaves that report out of its
++ * descriptor and accepts it all the same, as a feature report. Going by the
++ * descriptor, apple_taptic_switch_modes() sends such an actuator nothing, and
++ * depending on its version reports success anyway; the firmware then plays
++ * its own click on top of the host's. So an SPI actuator that hides the
++ * report is written directly, and then asked which mode it is in: the
++ * transport does not wait for the firmware's answer to a SET, and a request
++ * the firmware refuses fails silently. One that refuses keeps its firmware
++ * click. Every other actuator goes through the helper as before.
++ */
++#define APPLE_TAPTIC_MODE_REPORT	0x21
++/* spi-hid-apple copies this much into the buffer of a GET, whatever was asked. */
++#define APPLE_SPI_REPLY_SIZE		512
++
++#define HAPTIC_MODE_IDLE_MS	250	/* no finger for this long: the pad is idle */
++#define HAPTIC_MODE_SETTLE_MS	1000	/* after probe, reset or resume */
++#define HAPTIC_MODE_RECHECK_MS	30000	/* ask the actuator again this often */
++#define HAPTIC_MODE_RETRIES	5
++
++static bool magicmouse_actuator_hides_mode(struct hid_device *actuator)
++{
++	const struct hid_report_enum *reports = actuator->report_enum;
++
++	return actuator->bus == BUS_SPI &&
++	       !reports[HID_FEATURE_REPORT].report_id_hash[APPLE_TAPTIC_MODE_REPORT] &&
++	       !reports[HID_OUTPUT_REPORT].report_id_hash[APPLE_TAPTIC_MODE_REPORT];
++}
++
++static int magicmouse_actuator_write_mode(struct hid_device *actuator, int mode)
++{
++	u8 *msg;
++	int ret;
++
++	if (!magicmouse_actuator_hides_mode(actuator))
++		return apple_taptic_switch_modes(actuator, mode);
++
++	msg = kzalloc(2, GFP_KERNEL);
++	if (!msg)
++		return -ENOMEM;
++
++	msg[0] = APPLE_TAPTIC_MODE_REPORT;
++	msg[1] = mode == HID_HAPTIC_MODE_HOST;
++	ret = hid_hw_raw_request(actuator, msg[0], msg, 2, HID_FEATURE_REPORT,
++				 HID_REQ_SET_REPORT);
++	kfree(msg);
++
++	return ret < 0 ? ret : 0;
++}
++
++/* The mode an actuator that hides the report says it is in, or an error. */
++static int magicmouse_actuator_read_mode(struct hid_device *actuator)
++{
++	u8 *buf;
++	int ret;
++
++	buf = kzalloc(APPLE_SPI_REPLY_SIZE, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	ret = hid_hw_raw_request(actuator, APPLE_TAPTIC_MODE_REPORT, buf,
++				 APPLE_SPI_REPLY_SIZE, HID_FEATURE_REPORT,
++				 HID_REQ_GET_REPORT);
++	if (ret >= 2 && buf[0] == APPLE_TAPTIC_MODE_REPORT)
++		ret = buf[1] ? HID_HAPTIC_MODE_HOST : HID_HAPTIC_MODE_DEVICE;
++	else if (ret >= 0)
++		ret = -EPROTO;
++	kfree(buf);
++
++	return ret;
++}
++
++/*
++ * Set the mode and make sure of it. The J314 actuator shows the new mode in
++ * the very next read, a few milliseconds later; one that still reads back
++ * another mode, or nothing, after a second look has refused.
++ */
++static int magicmouse_actuator_set_mode(struct hid_device *actuator, int mode)
++{
++	int ret, tries;
++
++	ret = magicmouse_actuator_write_mode(actuator, mode);
++	if (ret || !magicmouse_actuator_hides_mode(actuator))
++		return ret;
++
++	for (tries = 0; tries < 2; tries++) {
++		msleep(tries ? 200 : 20);
++		ret = magicmouse_actuator_read_mode(actuator);
++		if (ret == mode)
++			return 0;
++	}
++
++	return ret < 0 ? ret : -EIO;
++}
++
+ static int magicmouse_switch_mode(struct input_dev *trackpad_idev, int mode)
+ {
+ 	struct hid_device *trackpad_hdev = input_get_drvdata(trackpad_idev);
+@@ -1454,18 +1603,17 @@
+ 
+ 	hid_dbg(trackpad_hdev, "switching haptics to mode %d\n", mode);
+ 
+-	return apple_taptic_switch_modes(actuator, mode);
++	return magicmouse_actuator_set_mode(actuator, mode);
+ }
+ 
+ static u8 magicmouse_haptic_softness(struct hid_device *hdev, bool deep);
+ static u8 magicmouse_haptic_strength(struct hid_device *hdev, bool deep);
+-static void magicmouse_haptic_release_mode(struct magicmouse_sc *msc);
+-static void magicmouse_haptic_release_mode_locked(struct magicmouse_sc *msc);
+ 
+ /*
+- * Play the waveform @pulses times, @haptic_pulse_gap_ms apart. A failure here
+- * would leave host-controlled mode without any click feedback, so hand the
+- * actuator back to the firmware and turn the feature off instead.
++ * Play the waveform @pulses times, @haptic_pulse_gap_ms apart, if the host
++ * holds the actuator. A failure here would leave host-controlled mode without
++ * any click feedback, so turn the feature off instead; the mode worker then
++ * hands the actuator back to the firmware.
+  */
+ static void magicmouse_haptic_pulses(struct magicmouse_sc *msc, u16 usage,
+ 				     bool deep, u8 pulses)
+@@ -1479,27 +1627,17 @@
+ 		return;
+ 
+ 	guard(mutex)(&msc->haptics->auto_trigger_mutex);
+-	actuator = magicmouse_get_actuator(msc);
+ 
+-	if (!actuator) {
+-		hid_warn(msc->hdev,
+-			 "no actuator for host click feedback; using the firmware's\n");
+-		haptic_press = false;
++	/*
++	 * Unless the actuator confirmed host-controlled mode its firmware plays
++	 * the click, and a pulse from here would be a second one.
++	 */
++	if (READ_ONCE(msc->haptics->mode) != HID_HAPTIC_MODE_HOST)
+ 		return;
+-	}
+ 
+-	if (READ_ONCE(msc->haptics->mode) != HID_HAPTIC_MODE_HOST) {
+-		ret = apple_taptic_switch_modes(actuator, HID_HAPTIC_MODE_HOST);
+-		if (ret) {
+-			hid_warn(msc->hdev,
+-				 "cannot take host-controlled mode (%d); using the firmware's\n",
+-				 ret);
+-			haptic_press = false;
+-			return;
+-		}
+-		WRITE_ONCE(msc->haptics->mode, HID_HAPTIC_MODE_HOST);
+-		hid_info(msc->hdev, "host-driven click feedback active\n");
+-	}
++	actuator = magicmouse_get_actuator(msc);
++	if (!actuator)
++		return;
+ 
+ 	strength = magicmouse_haptic_strength(msc->hdev, deep);
+ 	softness = magicmouse_haptic_softness(msc->hdev, deep);
+@@ -1513,7 +1651,9 @@
+ 				 "click waveform failed (%d); returning click feedback to the firmware\n",
+ 				 ret);
+ 			haptic_press = false;
+-			magicmouse_haptic_release_mode_locked(msc);
++			queue_delayed_work(msc->haptics->wq,
++					   &msc->haptic_mode_work,
++					   msecs_to_jiffies(HAPTIC_MODE_IDLE_MS));
+ 			return;
+ 		}
+ 		hid_dbg(msc->hdev, "played %s pulse %u/%u at strength 0x%02x\n",
+@@ -1525,34 +1665,132 @@
+ 	}
+ }
+ 
++/* Userspace has effects uploaded and so wants host-controlled mode. */
++static bool magicmouse_haptic_effects_loaded(struct magicmouse_sc *msc)
++{
++	unsigned int i;
++
++	if (!msc->haptic_effects)
++		return false;
++
++	for (i = 0; i < FF_MAX_EFFECTS; i++)
++		if (READ_ONCE(msc->haptic_effects[i].effect_type))
++			return true;
++
++	return false;
++}
++
+ /*
+- * Hand click feedback back to the actuator's firmware, unless userspace still
+- * has effects uploaded and so still wants host-controlled mode.
++ * Put the actuator in the mode click feedback needs: host-controlled while
++ * haptic_press is on, back to its firmware once that is off and userspace has
++ * no effects loaded. Queued from the report path whenever the two disagree.
++ *
++ * The switch waits until nothing touches the pad, so the click never changes
++ * hands in the middle of a press, and the cached mode only says
++ * host-controlled once the actuator confirmed it. Until then
++ * magicmouse_haptic_click() leaves both the button and the feedback to the
++ * firmware, so exactly one of the two plays the click at any time.
+  */
+-static void magicmouse_haptic_release_mode_locked(struct magicmouse_sc *msc)
++static void magicmouse_haptic_mode_worker(struct work_struct *ws)
+ {
++	struct magicmouse_sc *msc = container_of(to_delayed_work(ws),
++						 struct magicmouse_sc,
++						 haptic_mode_work);
++	struct hid_haptic_device *haptics = msc->haptics;
+ 	struct hid_device *actuator;
+-	unsigned int i;
++	int have, want, ret = 0;
++	u8 failures;
+ 
+-	if (READ_ONCE(msc->haptics->mode) != HID_HAPTIC_MODE_HOST)
++	guard(mutex)(&haptics->auto_trigger_mutex);
++
++	have = READ_ONCE(haptics->mode);
++	if (haptic_press)
++		want = HID_HAPTIC_MODE_HOST;
++	else if (have == HID_HAPTIC_MODE_HOST &&
++		 !magicmouse_haptic_effects_loaded(msc))
++		want = HID_HAPTIC_MODE_DEVICE;
++	else
+ 		return;
+ 
+-	if (msc->haptic_effects) {
+-		for (i = 0; i < FF_MAX_EFFECTS; i++)
+-			if (READ_ONCE(msc->haptic_effects[i].effect_type))
+-				return;
++	if (ktime_get_ns() - READ_ONCE(msc->haptic_touch_ns) <
++	    (u64)HAPTIC_MODE_IDLE_MS * NSEC_PER_MSEC) {
++		queue_delayed_work(haptics->wq, &msc->haptic_mode_work,
++				   msecs_to_jiffies(HAPTIC_MODE_IDLE_MS));
++		return;
+ 	}
+ 
+ 	actuator = magicmouse_get_actuator(msc);
+-	if (actuator && !apple_taptic_switch_modes(actuator,
+-						   HID_HAPTIC_MODE_DEVICE))
+-		WRITE_ONCE(msc->haptics->mode, HID_HAPTIC_MODE_DEVICE);
+-}
++	if (!actuator) {
++		ret = -ENODEV;	/* it may be registered after the trackpad */
++		goto failed;
++	}
+ 
+-static void magicmouse_haptic_release_mode(struct magicmouse_sc *msc)
+-{
+-	guard(mutex)(&msc->haptics->auto_trigger_mutex);
+-	magicmouse_haptic_release_mode_locked(msc);
++	/*
++	 * Where the actuator can be asked, ask it rather than assume: it may
++	 * have kept its mode over a reset we thought had cleared it, or lost
++	 * it without telling.
++	 */
++	if (magicmouse_actuator_hides_mode(actuator)) {
++		ret = magicmouse_actuator_read_mode(actuator);
++		if (ret == want) {
++			if (have != want)
++				hid_info(msc->hdev,
++					 "the actuator is already %s-controlled\n",
++					 want == HID_HAPTIC_MODE_HOST ?
++					 "host" : "device");
++			else if (haptic_trace)
++				hid_info(msc->hdev,
++					 "the actuator is still host-controlled\n");
++			have = want;
++			WRITE_ONCE(haptics->mode, have);
++		} else if (have == want) {
++			hid_info(msc->hdev,
++				 "the actuator left host-controlled mode (%d), taking it again\n",
++				 ret);
++			have = HID_HAPTIC_MODE_DEVICE;
++			WRITE_ONCE(haptics->mode, have);
++		}
++	}
++
++	if (have != want) {
++		ret = magicmouse_actuator_set_mode(actuator, want);
++		if (ret)
++			goto failed;
++
++		WRITE_ONCE(haptics->mode, want);
++		hid_info(msc->hdev, want == HID_HAPTIC_MODE_HOST ?
++			 "click feedback is host-driven\n" :
++			 "click feedback returned to the actuator's firmware\n");
++	}
++
++	WRITE_ONCE(msc->haptic_mode_checked_ns, ktime_get_ns());
++	WRITE_ONCE(msc->haptic_mode_failures, 0);
++	return;
++
++failed:
++	/*
++	 * Not host-controlled for certain, so make sure the firmware plays the
++	 * click; magicmouse_haptic_click() leaves the button to it as well.
++	 */
++	if (want == HID_HAPTIC_MODE_HOST) {
++		WRITE_ONCE(haptics->mode, HID_HAPTIC_MODE_DEVICE);
++		if (actuator)
++			magicmouse_actuator_write_mode(actuator,
++						       HID_HAPTIC_MODE_DEVICE);
++	}
++
++	failures = READ_ONCE(msc->haptic_mode_failures) + 1;
++	WRITE_ONCE(msc->haptic_mode_failures, failures);
++	if (failures < HAPTIC_MODE_RETRIES) {
++		queue_delayed_work(haptics->wq, &msc->haptic_mode_work,
++				   msecs_to_jiffies(500 << failures));
++		return;
++	}
++
++	WRITE_ONCE(haptics->mode, HID_HAPTIC_MODE_DEVICE);
++	hid_warn(msc->hdev,
++		 "cannot switch the actuator to %s-controlled mode (%d); its firmware keeps the click feedback\n",
++		 want == HID_HAPTIC_MODE_HOST ? "host" : "device", ret);
+ }
+ 
+ static void magicmouse_press_worker(struct work_struct *ws)
+@@ -1560,10 +1798,8 @@
+ 	struct magicmouse_sc *msc =
+ 		container_of(ws, struct magicmouse_sc, haptic_press_work);
+ 
+-	if (!haptic_press) {
+-		magicmouse_haptic_release_mode(msc);
++	if (!haptic_press)
+ 		return;
+-	}
+ 
+ 	magicmouse_haptic_pulses(msc, HID_HP_WAVEFORMPRESS & HID_USAGE, false,
+ 				 haptic_press_pulses);
+@@ -1610,10 +1846,8 @@
+ 	struct magicmouse_sc *msc =
+ 		container_of(ws, struct magicmouse_sc, haptic_release_work);
+ 
+-	if (!haptic_press) {
+-		magicmouse_haptic_release_mode(msc);
++	if (!haptic_press)
+ 		return;
+-	}
+ 
+ 	/*
+ 	 * The bare header tells the firmware that the click gesture is over, so
+@@ -1625,25 +1859,51 @@
+ 
+ /*
+  * Decide whether the pad is clicked from the summed finger pressure, and
+- * queue the feedback for it: in host-controlled mode the firmware no longer
+- * sets the button itself. The wide gap between the press and release
+- * thresholds keeps a single click from chattering.
++ * queue the feedback for it, while the actuator is host-controlled. The wide
++ * gap between the press and release thresholds keeps a single click from
++ * chattering.
+  *
+  * Returns the button state to report. Playing the waveform sleeps, so it is
+  * left to the workqueue.
+  */
+ static bool magicmouse_haptic_click(struct magicmouse_sc *msc, u32 pressure,
+-				    bool firmware_button)
++				    bool touching, bool firmware_button)
+ {
+ 	bool host_mode;
++	u64 now;
+ 
+ 	if (!msc->haptics || !msc->haptics->wq)
+ 		return firmware_button;
+ 
+ 	host_mode = READ_ONCE(msc->haptics->mode) == HID_HAPTIC_MODE_HOST;
++	now = ktime_get_ns();
++
++	if (touching || firmware_button)
++		WRITE_ONCE(msc->haptic_touch_ns, now);
++
++	/*
++	 * Is the actuator in the mode haptic_press asks for, and has it said so
++	 * lately? If not, the mode worker sees to it once the pad is idle. It
++	 * gives up after a few refusals; turning haptic_press off and on again
++	 * makes it try afresh.
++	 */
++	if (haptic_press != host_mode ||
++	    (host_mode && now - READ_ONCE(msc->haptic_mode_checked_ns) >
++	     (u64)HAPTIC_MODE_RECHECK_MS * NSEC_PER_MSEC)) {
++		if (READ_ONCE(msc->haptic_mode_failures) < HAPTIC_MODE_RETRIES)
++			queue_delayed_work(msc->haptics->wq,
++					   &msc->haptic_mode_work,
++					   msecs_to_jiffies(HAPTIC_MODE_IDLE_MS));
++	} else if (!haptic_press) {
++		WRITE_ONCE(msc->haptic_mode_failures, 0);
++	}
+ 
+-	if (!haptic_press && !host_mode) {
+-		/* The firmware owns the actuator and reports the button. */
++	if (!host_mode) {
++		/*
++		 * The firmware holds the actuator: it plays the click and reports
++		 * the button. Deriving a lighter click here as well would be felt
++		 * as two.
++		 */
+ 		msc->haptic_button_down = false;
+ 		if (msc->haptic_deep_down) {
+ 			msc->haptic_deep_down = false;
+@@ -1654,14 +1914,9 @@
+ 
+ 	/*
+ 	 * Host-controlled mode without host-driven feedback means userspace
+-	 * uploaded an effect and owns the waveform. Ask for the actuator back,
+-	 * but keep deriving the button until it is: the firmware reports no
+-	 * button while it does not hold the actuator, and the mode cannot be
+-	 * released while an effect is loaded, so trusting it here would leave
+-	 * the pad unable to click until every effect is erased.
++	 * uploaded an effect and owns the waveform, or the mode worker is about
++	 * to hand the actuator back. Keep deriving the button until it has.
+ 	 */
+-	if (!haptic_press)
+-		queue_work(msc->haptics->wq, &msc->haptic_release_work);
+ 
+ 	/*
+ 	 * Three levels, up, clicked and deep, each step with its own click on
+@@ -1670,19 +1925,44 @@
+ 	 * apart.
+ 	 */
+ 	if (!msc->haptic_button_down) {
+-		if (pressure >= haptic_press_threshold) {
++		if (pressure >= haptic_press_threshold &&
++		    now - msc->haptic_released_ns >= (u64)haptic_debounce_ms * NSEC_PER_MSEC) {
+ 			msc->haptic_button_down = true;
+-			hid_dbg(msc->hdev, "click at pressure %u\n", pressure);
++			msc->haptic_low_since_ns = 0;
++			if (haptic_trace)
++				hid_info(msc->hdev, "click DOWN p=%u\n", pressure);
+ 			queue_work(msc->haptics->wq, &msc->haptic_press_work);
++		} else if (haptic_trace && pressure >= haptic_press_threshold) {
++			hid_info(msc->hdev, "click DOWN suppressed (too soon after release) p=%u\n", pressure);
+ 		}
+ 	} else if (pressure <= haptic_release_threshold) {
+-		msc->haptic_button_down = false;
+-		if (msc->haptic_deep_down) {
+-			msc->haptic_deep_down = false;
+-			magicmouse_force_key(msc, false);
+-		}
+-		hid_dbg(msc->hdev, "release at pressure %u\n", pressure);
+-		queue_work(msc->haptics->wq, &msc->haptic_release_work);
++		if (!msc->haptic_low_since_ns)
++			msc->haptic_low_since_ns = now;
++
++		/*
++		 * A lifted finger ends the click at once: the pad stops sending
++		 * reports after that, so waiting out the debounce would leave the
++		 * button held until the next touch.
++		 */
++		if (pressure == 0 ||
++		    now - msc->haptic_low_since_ns >=
++		    (u64)haptic_debounce_ms * NSEC_PER_MSEC) {
++			msc->haptic_button_down = false;
++			msc->haptic_low_since_ns = 0;
++			msc->haptic_released_ns = now;
++			if (msc->haptic_deep_down) {
++				msc->haptic_deep_down = false;
++				magicmouse_force_key(msc, false);
++			}
++			if (haptic_trace)
++				hid_info(msc->hdev, "click UP p=%u\n", pressure);
++			queue_work(msc->haptics->wq, &msc->haptic_release_work);
++		}
++	} else if (msc->haptic_low_since_ns) {
++		/* A brief dip: the pressure came back before the debounce ran out. */
++		if (haptic_trace)
++			hid_info(msc->hdev, "dip ignored p=%u\n", pressure);
++		msc->haptic_low_since_ns = 0;
+ 	} else if (!msc->haptic_deep_down) {
+ 		if (haptic_deep_threshold && pressure >= haptic_deep_threshold) {
+ 			msc->haptic_deep_down = true;
+@@ -1702,12 +1982,11 @@
+ }
+ 
+ /*
+- * The actuator leaves system sleep in device-controlled mode whatever it was
+- * in before: the transport resumes the keyboard and the trackpad, not the
+- * actuator, and nothing reports the change. A cached host-controlled mode then
+- * makes the next press skip the switch and play a pulse while the firmware is
+- * playing its own, which is felt as two clicks. Forget it instead; the next
+- * press takes the mode again if it needs it.
++ * The actuator may leave system sleep, or a reset of its controller, in
++ * device-controlled mode whatever it was in before, and nothing reports the
++ * change. A cached host-controlled mode would then have the host play a pulse
++ * while the firmware is playing its own, which is felt as two clicks. Forget
++ * it instead; the mode worker takes it again once things have settled.
+  */
+ static void magicmouse_haptic_forget_mode(struct magicmouse_sc *msc)
+ {
+@@ -1720,10 +1999,15 @@
+ 		msc->haptic_deep_down = false;
+ 		magicmouse_force_key(msc, false);
+ 	}
++
++	WRITE_ONCE(msc->haptic_mode_failures, 0);
++	if (haptic_press && msc->haptics->wq)
++		mod_delayed_work(msc->haptics->wq, &msc->haptic_mode_work,
++				 msecs_to_jiffies(HAPTIC_MODE_SETTLE_MS));
+ }
+ #else
+ static bool magicmouse_haptic_click(struct magicmouse_sc *msc, u32 pressure,
+-				    bool firmware_button)
++				    bool touching, bool firmware_button)
+ {
+ 	return firmware_button;
+ }
+@@ -1991,7 +2275,7 @@
+ 		return;
+ 	guard(mutex)(&job->msc->haptics->auto_trigger_mutex);
+ 	if (READ_ONCE(job->msc->haptics->mode) != HID_HAPTIC_MODE_HOST) {
+-		ret = apple_taptic_switch_modes(actuator, HID_HAPTIC_MODE_HOST);
++		ret = magicmouse_actuator_set_mode(actuator, HID_HAPTIC_MODE_HOST);
+ 		if (ret) {
+ 			hid_warn(actuator, "cannot take host-controlled mode (%d)\n", ret);
+ 			return;
+@@ -2030,8 +2314,12 @@
+ 	/* Drain workers before taking the mutex they need. */
+ 	flush_workqueue(msc->haptics->wq);
+ 	guard(mutex)(&msc->haptics->auto_trigger_mutex);
+-	/* Return to device-controlled mode if there are no effects left */
+-	if (READ_ONCE(msc->haptics->mode) == HID_HAPTIC_MODE_HOST) {
++	/*
++	 * Return to device-controlled mode if there are no effects left, unless
++	 * the host plays the click itself and so keeps the actuator.
++	 */
++	if (!haptic_press &&
++	    READ_ONCE(msc->haptics->mode) == HID_HAPTIC_MODE_HOST) {
+ 		ret = magicmouse_switch_mode(trackpad_idev, HID_HAPTIC_MODE_DEVICE);
+ 
+ 		if (ret) {
+@@ -2060,8 +2348,16 @@
+ 	{
+ 		guard(mutex)(&haptic_dev->auto_trigger_mutex);
+ 		if (msc->haptics && READ_ONCE(msc->haptics->mode) == HID_HAPTIC_MODE_HOST) {
+-			ret = magicmouse_switch_mode(msc->haptics->input_dev,
+-						     HID_HAPTIC_MODE_DEVICE);
++			struct hid_device *actuator = magicmouse_get_actuator(msc);
++
++			/*
++			 * No read-back here: the device may be on its way out, and
++			 * nothing could be done about a refusal anyway.
++			 */
++			ret = actuator ?
++				magicmouse_actuator_write_mode(actuator,
++							       HID_HAPTIC_MODE_DEVICE) :
++				-ENODEV;
+ 			if (ret)
+ 				hid_warn(msc->hdev,
+ 					 "failed to switch back to device-controlled mode: %d\n",
+@@ -2154,6 +2450,7 @@
+ 	INIT_WORK(&msc->haptic_deep_work, magicmouse_deep_worker);
+ 	INIT_WORK(&msc->haptic_deep_release_work,
+ 		  magicmouse_deep_release_worker);
++	INIT_DELAYED_WORK(&msc->haptic_mode_work, magicmouse_haptic_mode_worker);
+ 
+ 	if (haptic_deep_keycode)
+ 		magicmouse_setup_force_input(msc);
+@@ -2233,6 +2530,12 @@
+ 	}
+ 
+ 	msc->haptics = haptics;
++
++	/* Take the actuator for host-driven clicks once it has shown up. */
++	if (haptic_press)
++		queue_delayed_work(haptics->wq, &msc->haptic_mode_work,
++				   msecs_to_jiffies(HAPTIC_MODE_SETTLE_MS));
++
+ 	return 0;
+ }
+ 
+@@ -2241,6 +2544,8 @@
+ 	if (!msc->haptics)
+ 		return;
+ 
++	/* It re-queues itself, and the other workers queue it: stop it for good. */
++	disable_delayed_work_sync(&msc->haptic_mode_work);
+ 	cancel_work_sync(&msc->haptic_press_work);
+ 	cancel_work_sync(&msc->haptic_release_work);
+ 	cancel_work_sync(&msc->haptic_deep_work);

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Builds the package and installs it: the app, its service, and the driver's
+# source, which DKMS then builds for the running kernel.
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+"$ROOT/bin/build"
+cd "$ROOT/pkgbuild"
+exec makepkg -fsi "$@"

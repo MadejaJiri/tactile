@@ -1,0 +1,181 @@
+#!/bin/bash
+# tactile-driver: which hid-magicmouse is in use, and switching it without a reboot.
+#
+#   tactile-driver status     what is installed, what is loaded
+#   tactile-driver reload     load the installed driver now (root)
+#   tactile-driver stock      the kernel's own driver until the next boot (root)
+#
+# A reboot does the same as `reload`: Tactile's driver is the one the system
+# loads once DKMS has built it. Switching by hand pauses the keyboard and the
+# trackpad for about two seconds, because both hang off one SPI device that
+# has to be probed again.
+set -euo pipefail
+
+KERNEL="$(uname -r)"
+PARAMETERS=/sys/module/hid_magicmouse/parameters
+SPI=/sys/bus/spi/drivers/spi-hid-apple-of
+STOCK="$(ls "/lib/modules/$KERNEL/kernel/drivers/hid/"hid-magicmouse.ko* 2>/dev/null | head -n 1 || true)"
+
+installed() {
+	modinfo -k "$KERNEL" -F filename hid_magicmouse 2>/dev/null || true
+}
+
+# The patched driver is told from the kernel's own by an option only it has.
+running() {
+	if [ ! -d /sys/module/hid_magicmouse ]; then
+		echo none
+	elif [ -e "$PARAMETERS/haptic_debounce_ms" ]; then
+		echo tactile
+	else
+		echo stock
+	fi
+}
+
+status() {
+	local file
+	file="$(installed)"
+	case "$file" in
+	*/updates/*) echo "installed  Tactile's driver ($file)" ;;
+	"") echo "installed  no hid-magicmouse for kernel $KERNEL" ;;
+	*) echo "installed  the kernel's own driver only ($file)" ;;
+	esac
+	case "$(running)" in
+	tactile) echo "running    Tactile's driver" ;;
+	stock) echo "running    the kernel's own driver" ;;
+	none) echo "running    hid-magicmouse is not loaded" ;;
+	esac
+	if command -v dkms >/dev/null 2>&1; then
+		echo "dkms       $(dkms status tactile 2>/dev/null | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
+	fi
+	if systemctl is-active --quiet tactiled.service 2>/dev/null; then
+		echo "service    running"
+	else
+		echo "service    not running (sudo systemctl enable --now tactiled)"
+	fi
+}
+
+need_root() {
+	if [ "$(id -u)" != 0 ]; then
+		echo "tactile-driver: this needs root: sudo tactile-driver $1" >&2
+		exit 1
+	fi
+}
+
+# Everything the kernel logs after the mark belongs to this run.
+MARK="tactile-driver $$-$(date +%s)"
+since_mark() {
+	dmesg | awk -v m="$MARK" 'seen; index($0, m) { seen = 1 }'
+}
+
+# insmod takes a file and nothing else, so what the module needs goes first.
+load_stock() {
+	local needs
+	needs="$(modinfo -F depends "$STOCK" | tr ',' ' ')"
+	# shellcheck disable=SC2086
+	[ -z "$needs" ] || modprobe -a $needs
+	insmod "$STOCK"
+}
+
+swap() {
+	local want="$1" device=""
+	echo "$MARK" >/dev/kmsg 2>/dev/null || true
+
+	if [ -d "$SPI" ]; then
+		device="$(ls "$SPI" | grep -m1 -E '^spi[0-9]+\.[0-9]+$' || true)"
+	fi
+
+	rmmod hid_magicmouse 2>/dev/null || true
+	if [ -d /sys/module/hid_magicmouse ]; then
+		echo "tactile-driver: the running driver is in use and could not be unloaded." >&2
+		exit 1
+	fi
+	if [ "$want" = stock ]; then
+		load_stock
+	elif ! modprobe hid_magicmouse; then
+		echo "tactile-driver: the driver did not load; putting the kernel's own back." >&2
+		load_stock || true
+		want=failed
+	fi
+
+	if [ -n "$device" ]; then
+		# Probe the SPI device again, so the driver starts from a freshly
+		# reset controller. The keyboard is on the same device: whatever
+		# happens next, bind it again.
+		trap 'echo "$device" >"$SPI/bind" 2>/dev/null || true' EXIT
+		echo "$device" >"$SPI/unbind"
+		sleep 2
+		echo "$device" >"$SPI/bind"
+		trap - EXIT
+	fi
+	[ "$want" != failed ] || exit 1
+}
+
+reload() {
+	need_root reload
+	case "$(installed)" in
+	*/updates/*) ;;
+	*)
+		echo "tactile-driver: Tactile's driver is not built for kernel $KERNEL." >&2
+		echo "Check that the kernel's headers are installed, then: sudo dkms autoinstall" >&2
+		command -v dkms >/dev/null 2>&1 && dkms status tactile >&2 || true
+		exit 1
+		;;
+	esac
+	swap tactile
+	if [ "$(running)" != tactile ]; then
+		echo "tactile-driver: the kernel's own driver loaded instead." >&2
+		exit 1
+	fi
+	if ! systemctl is-active --quiet tactiled.service 2>/dev/null; then
+		echo "Loaded. The trackpad's firmware plays the click until the service sets it up:"
+		echo "  sudo systemctl enable --now tactiled"
+		return
+	fi
+
+	# The service notices the new module within a few seconds and applies the
+	# saved settings; the driver then takes the click once nothing touches
+	# the pad.
+	echo "Loaded. Waiting for the saved settings (keep your fingers off the trackpad)..."
+	local log=""
+	local i
+	for i in $(seq 1 40); do
+		sleep 0.5
+		log="$(since_mark)"
+		if grep -q -E "click feedback is host-driven|already host-controlled|cannot switch the actuator" <<<"$log"; then
+			break
+		fi
+		# Set to let the firmware play the click: nothing to wait for.
+		if [ "$(cat "$PARAMETERS/haptic_press" 2>/dev/null)" = N ] && [ "$i" -gt 12 ]; then
+			break
+		fi
+	done
+	if grep -q -E "click feedback is host-driven|already host-controlled" <<<"$log"; then
+		echo "OK: the driver plays the click."
+	elif grep -q "cannot switch the actuator" <<<"$log"; then
+		echo "The trackpad refused to hand over the click. Lift your fingers and press \"Try again\" in Tactile." >&2
+		exit 1
+	else
+		echo "OK: the driver is loaded; the trackpad's firmware plays the click (see: tactile status)."
+	fi
+}
+
+stock() {
+	need_root stock
+	if [ -z "$STOCK" ]; then
+		echo "tactile-driver: kernel $KERNEL has no hid-magicmouse of its own." >&2
+		exit 1
+	fi
+	swap stock
+	echo "OK: the kernel's own driver is loaded until the next boot; the trackpad's firmware plays the click."
+}
+
+case "${1:-status}" in
+status) status ;;
+reload) reload ;;
+stock) stock ;;
+-h | --help | help) sed -n '2,11s/^# \{0,1\}//p' "$0" ;;
+*)
+	echo "tactile-driver: unknown command \"$1\" (status, reload, stock)" >&2
+	exit 1
+	;;
+esac
