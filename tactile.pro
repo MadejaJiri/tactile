@@ -11,6 +11,7 @@ HEADERS += \
     src/link.h \
     src/pressurechart.h \
     src/settings.h \
+    src/tunes.h \
     src/theme.h \
     src/translator.h \
     src/version.h

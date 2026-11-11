@@ -15,13 +15,26 @@ public:
         const char *key;
         int minimum, maximum, fallback;
         const char *parameter;  // the module parameter it is written to
+        const char *about;      // one line for `tactile keys`
     };
 
     static const QList<Field> &fields();
     static const Field *field(const QString &key);
     static QStringList presets();
 
-    Settings();  // the Light preset
+    // The keys Force Click can hold: F13 to F19, as the kernel numbers them.
+    // Layouts give F20 to F23 jobs of their own (one switches the touchpad
+    // off), so those are not offered.
+    static constexpr int FirstForceKey = 183, LastForceKey = 189;
+    // The click ends at least this far below where it starts.
+    static constexpr int ReleaseGap = 5;
+
+    // The feedback strength that suits a click pressure, and the highest
+    // release pressure that is still clear of it.
+    static int suggestedStrength(int press);
+    static int suggestedRelease(int press);
+
+    Settings();  // the Medium preset
 
     int value(const QString &key) const { return m_values.value(key).toInt(); }
     bool set(const QString &key, int value);
@@ -33,9 +46,13 @@ public:
     // a click that never ends or a Force Click that fires with the click.
     void normalize();
 
-    // Changes only who plays the click and where it starts and ends.
+    // Light, Medium and Firm set the pressures and the feedback that goes
+    // with them; "firmware" only hands the click back to the trackpad.
     bool applyPreset(const QString &name);
-    QString preset() const;  // the preset the values match, or empty
+    // Which of Light, Medium and Firm the values match, or empty.
+    QString feel() const;
+    // The same, or "firmware" while the trackpad plays the click itself.
+    QString preset() const;
 
     QJsonObject toJson() const;
     // Takes known keys from the object and ignores the rest; false with a

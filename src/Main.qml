@@ -30,7 +30,7 @@ ApplicationWindow {
     readonly property string driverCommand: "sudo tactile-driver reload"
     readonly property string repairCommand: "sudo tactile-driver repair"
     readonly property string problemCommand: backend.problem === "daemon" ? serviceCommand
-                                           : backend.problem === "stock" ? driverCommand
+                                           : backend.problem === "stock" || backend.problem === "outdated" ? driverCommand
                                            : backend.problem === "noactuator" ? repairCommand : ""
     readonly property string problemText: {
         switch (backend.problem) {
@@ -38,6 +38,7 @@ ApplicationWindow {
         case "refused": return qsTr("The service only listens to the user sitting at this computer.")
         case "missing": return qsTr("The trackpad driver (hid-magicmouse) is not loaded.")
         case "stock": return qsTr("The kernel's own trackpad driver is loaded, so the settings below are saved but not in effect. Load Tactile's driver with: %1").arg(driverCommand)
+        case "outdated": return qsTr("The loaded driver is older than this version of Tactile, so some of the settings below do nothing yet. The new one takes over at the next boot, or with: %1").arg(driverCommand)
         case "notrackpad": return qsTr("No Apple trackpad found.")
         case "noactuator": return qsTr("The trackpad's actuator, the part that makes the click, was not found at this boot, so the firmware still plays the click. Find it again with: %1").arg(repairCommand)
         case "failed": return qsTr("The trackpad refused to hand over the click, so its firmware still plays it. Lift your fingers and try again.")
@@ -60,7 +61,8 @@ ApplicationWindow {
     Shortcut { sequence: "1"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.applyPreset("light") }
     Shortcut { sequence: "2"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.applyPreset("medium") }
     Shortcut { sequence: "3"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.applyPreset("firm") }
-    Shortcut { sequence: "4"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.applyPreset("firmware") }
+    Shortcut { sequence: "T"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.toggle("hostClick") }
+    Shortcut { sequence: "M"; context: Qt.ApplicationShortcut; enabled: win.idle && win.hostClick; onActivated: backend.matchFeedback() }
     Shortcut { sequence: "["; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.nudge(-1) }
     Shortcut { sequence: "]"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.nudge(1) }
     Shortcut { sequence: "C"; context: Qt.ApplicationShortcut; enabled: win.idle; onActivated: backend.startCalibration() }
@@ -111,7 +113,8 @@ ApplicationWindow {
     component PresetButton: ActionButton {
         property string name
 
-        primary: backend.preset === name
+        primary: win.hostClick && backend.feel === name
+        enabled: win.hostClick
         implicitWidth: Math.max(96, contentItem.implicitWidth + 30)
         onClicked: backend.applyPreset(name)
     }
@@ -169,16 +172,20 @@ ApplicationWindow {
                         font.pixelSize: 22
                         font.bold: true
                     }
-                    Rectangle {
-                        width: 8
-                        height: 8
-                        radius: 4
+                    Switch {
+                        // Who plays the click: Tactile, with everything
+                        // below, or the trackpad by itself as without it.
+                        checked: win.hostClick
+                        enabled: backend.connected
+                        focusPolicy: Qt.NoFocus
                         Layout.leftMargin: 4
-                        color: backend.problem === "" && win.hostClick ? theme.accent : "#6c6c75"
+                        onToggled: backend.set("hostClick", checked ? 1 : 0)
+                        Accessible.name: qsTr("Tactile plays the click")
                     }
                     Label {
                         text: !backend.connected ? qsTr("Not connected")
-                            : backend.problem === "" && win.hostClick ? qsTr("The driver plays the click")
+                            : !win.hostClick ? qsTr("Off: the trackpad's firmware plays the click, as without Tactile")
+                            : backend.problem === "" ? qsTr("Tactile plays the click")
                             : qsTr("The trackpad's firmware plays the click")
                         color: "#9a9aa3"
                         font.pixelSize: 14
@@ -370,12 +377,13 @@ ApplicationWindow {
                     PresetButton { name: "light"; text: qsTr("Light") }
                     PresetButton { name: "medium"; text: qsTr("Medium") }
                     PresetButton { name: "firm"; text: qsTr("Firm") }
-                    PresetButton { name: "firmware"; text: qsTr("Firmware") }
-                    Label {
-                        text: backend.preset === "" ? qsTr("Custom") : ""
-                        color: "#9a9aa3"
-                        font.pixelSize: 13
-                        Layout.leftMargin: 6
+                    ActionButton {
+                        // Not a choice to make: it lights up once the values
+                        // are no longer one of the three.
+                        text: qsTr("Custom")
+                        primary: win.hostClick && backend.feel === ""
+                        enabled: false
+                        implicitWidth: Math.max(96, contentItem.implicitWidth + 30)
                     }
                     Item { Layout.fillWidth: true }
                     ActionButton {
@@ -384,12 +392,8 @@ ApplicationWindow {
                         onClicked: backend.startCalibration()
                     }
                     ActionButton {
-                        text: qsTr("Test click")
-                        onClicked: backend.testClick("press")
-                    }
-                    ActionButton {
-                        text: qsTr("Reset")
-                        quiet: true
+                        text: qsTr("Reset to Medium")
+                        subdued: true
                         onClicked: backend.reset()
                     }
                 }
@@ -403,7 +407,7 @@ ApplicationWindow {
 
                     SettingsCard {
                         title: qsTr("Click")
-                        note: win.hostClick ? "" : qsTr("The trackpad's firmware plays the click at its own pressure. Pick Light, Medium or Firm to set it here.")
+                        note: win.hostClick ? "" : qsTr("The trackpad's firmware plays the click at its own pressure. Switch Tactile on at the top to set it here.")
 
                         SettingRow {
                             key: "press"
@@ -414,7 +418,9 @@ ApplicationWindow {
                         SettingRow {
                             key: "release"
                             label: qsTr("Release pressure")
-                            hint: qsTr("The click ends when the pressure falls below this.")
+                            hint: qsTr("The click ends when the pressure falls below this. The tick marks 10% under the click pressure, the closest that is recommended.")
+                            highest: (backend.settings.press ?? 0) - 5
+                            mark: backend.suggestedRelease
                             enabled: win.hostClick
                         }
                         SettingRow {
@@ -422,6 +428,19 @@ ApplicationWindow {
                             label: qsTr("Bounce filter")
                             unit: qsTr("ms")
                             hint: qsTr("How long the pressure must stay low before the click ends, and before the next one can start.")
+                            enabled: win.hostClick
+                        }
+                        SettingRow {
+                            key: "fingerExtra"
+                            label: qsTr("Extra pressure per extra finger")
+                            zeroText: qsTr("None")
+                            hint: qsTr("The pad adds up the pressure of all fingers. Each finger beyond the first raises the click pressure by this much, so two fingers resting to scroll do not click.")
+                            enabled: win.hostClick
+                        }
+                        SwitchRow {
+                            key: "oneFinger"
+                            label: qsTr("Only one finger starts a click")
+                            hint: qsTr("With two or more fingers down, nothing clicks. That includes the two-finger click, which is usually the right click.")
                             enabled: win.hostClick
                         }
                     }
@@ -435,16 +454,58 @@ ApplicationWindow {
                             onClicked: backend.testClick("press")
                         }
 
+                        PulsePattern {
+                            id: pattern
+                            accent: theme.accent
+                            readonly property int strength: (backend.settings.strength || backend.defaults.strength) ?? 0
+                            groups: {
+                                translator.language
+                                const s = backend.settings
+                                const list = [{ label: qsTr("Press"), pulses: s.pressPulses ?? 0, gap: s.pulseGap ?? 25, strength: strength }]
+                                if (win.forceClick)
+                                    list.push({ label: qsTr("Force Click"), pulses: s.forcePulses ?? 0, gap: s.forceGap ?? 15,
+                                                strength: (s.forceStrength || backend.defaults.forceStrength) ?? 255 })
+                                list.push({ label: qsTr("Release"), pulses: s.releasePulses ?? 0, gap: s.pulseGap ?? 25,
+                                            strength: s.releaseStrength || strength })
+                                return list
+                            }
+                        }
+                        Label {
+                            text: qsTr("One bar per pulse: its height is the strength, the spacing is the gap. The shape of a single pulse is the trackpad's own.")
+                            color: parent.enabled ? "#8b8b94" : "#5c5c64"
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
                         SettingRow {
+                            id: strengthRow
                             key: "strength"
                             label: qsTr("Strength")
                             zeroMeans: backend.defaults.strength ?? 0
+                            mark: backend.suggestedStrength
+                            // A light click wants a gentle pulse and a firm
+                            // one a strong pulse. Offered, never done unasked.
+                            readonly property bool off: Math.abs(shown - backend.suggestedStrength) > 10
+                            hint: off ? qsTr("The tick is what suits a click pressure of %1: about %2.").arg(win.num(backend.settings.press ?? 0)).arg(win.num(backend.suggestedStrength))
+                                      : qsTr("Suits the click pressure.")
+                            action: ActionButton {
+                                visible: strengthRow.off
+                                text: qsTr("Match")
+                                quiet: true
+                                implicitHeight: 24
+                                onClicked: backend.matchFeedback()
+                            }
                         }
                         SettingRow {
                             key: "softness"
                             label: qsTr("Softness")
                             zeroMeans: backend.defaults.softness ?? 0
                             hint: qsTr("Shapes the pulse. Change it and feel the difference.")
+                        }
+                        SettingRow {
+                            key: "releaseStrength"
+                            label: qsTr("Strength on release")
+                            zeroText: qsTr("Same as the press")
                         }
                         SettingRow {
                             key: "pressPulses"
@@ -460,6 +521,32 @@ ApplicationWindow {
                             label: qsTr("Gap between pulses")
                             unit: qsTr("ms")
                         }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+
+                            Label {
+                                text: qsTr("Play a rhythm")
+                                color: parent.enabled ? "#ececef" : "#6c6c75"
+                                font.pixelSize: 14
+                                Layout.fillWidth: true
+                            }
+                            ComboBox {
+                                id: tuneBox
+                                model: backend.tunes
+                                focusPolicy: Qt.NoFocus
+                                implicitHeight: 36
+                                font.pixelSize: 14
+                                font.capitalization: Font.Capitalize
+                                Material.roundedScale: theme.radius
+                                Accessible.name: qsTr("Play a rhythm")
+                            }
+                            ActionButton {
+                                text: qsTr("Play")
+                                enabled: tuneBox.count > 0
+                                onClicked: backend.playTune(tuneBox.currentText)
+                            }
+                        }
                     }
 
                     SettingsCard {
@@ -468,7 +555,7 @@ ApplicationWindow {
                         readonly property bool on: backend.settings.forceClick === 1
                         title: qsTr("Force Click")
                         enabled: win.hostClick
-                        note: qsTr("Press harder for a second, deeper click you can feel. Apps do not get it as an event of its own.")
+                        note: qsTr("Press harder for a second, deeper click. It can hold a key while it lasts, which you can bind to anything.")
                         corner: [
                             ActionButton {
                                 text: qsTr("Feel it")
@@ -523,23 +610,57 @@ ApplicationWindow {
                             unit: qsTr("ms")
                             enabled: win.forceClick
                         }
-                        RowLayout {
+                        SwitchRow {
+                            key: "forceWaveform"
                             visible: forceCard.on
-                            Layout.fillWidth: true
+                            label: qsTr("Deeper pulse")
+                            hint: qsTr("On: the pulse the trackpad keeps for Force Click. Off: the same pulse as an ordinary click.")
                             enabled: win.forceClick
-                            spacing: 12
+                        }
+                        ColumnLayout {
+                            visible: forceCard.on
+                            enabled: win.forceClick
+                            spacing: 0
+                            Layout.fillWidth: true
 
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 12
+
+                                Label {
+                                    text: qsTr("Holds the key")
+                                    color: parent.enabled ? "#ececef" : "#6c6c75"
+                                    font.pixelSize: 14
+                                    Layout.fillWidth: true
+                                }
+                                ComboBox {
+                                    // F13 to F19: keys no keyboard here has, so
+                                    // nothing else is bound to them.
+                                    readonly property int stored: backend.settings.forceKey ?? 0
+                                    model: {
+                                        translator.language
+                                        const keys = [qsTr("None")]
+                                        for (let f = 13; f <= 19; f++)
+                                            keys.push("F" + f)
+                                        return keys
+                                    }
+                                    currentIndex: stored >= 183 ? stored - 182 : 0
+                                    focusPolicy: Qt.NoFocus
+                                    implicitHeight: 36
+                                    font.pixelSize: 14
+                                    Material.roundedScale: theme.radius
+                                    onActivated: index => backend.set("forceKey", index === 0 ? 0 : 182 + index)
+                                    Accessible.name: qsTr("Holds the key")
+                                }
+                            }
                             Label {
-                                text: qsTr("The trackpad's own Force Click pulse")
-                                color: parent.enabled ? "#ececef" : "#6c6c75"
-                                font.pixelSize: 14
+                                text: backend.settings.forceKey >= 183
+                                      ? qsTr("Pressed when Force Click starts and let go when it ends. Bind it in Hyprland as code:%1 to give Force Click an action.").arg(backend.settings.forceKey + 8)
+                                      : qsTr("Pressed when Force Click starts and let go when it ends. Bind the key in Hyprland to give Force Click an action.")
+                                color: parent.enabled ? "#8b8b94" : "#5c5c64"
+                                font.pixelSize: 12
                                 wrapMode: Text.WordWrap
                                 Layout.fillWidth: true
-                            }
-                            Switch {
-                                checked: backend.settings.forceWaveform === 1
-                                focusPolicy: Qt.NoFocus
-                                onToggled: backend.set("forceWaveform", checked ? 1 : 0)
                             }
                         }
                     }
@@ -703,13 +824,15 @@ ApplicationWindow {
 
                     Repeater {
                         model: [
-                            { keys: ["1", "2", "3", "4"], what: qsTr("Light, Medium, Firm, Firmware") },
+                            { keys: ["T"], what: qsTr("Tactile on or off") },
+                            { keys: ["1", "2", "3"], what: qsTr("Light, Medium, Firm") },
                             { keys: ["[", "]"], what: qsTr("Lighter or firmer click") },
-                            { keys: ["Space"], what: qsTr("Play a test click") },
+                            { keys: ["Space"], what: qsTr("Feel the click") },
+                            { keys: ["M"], what: qsTr("Match the feedback to the click pressure") },
                             { keys: ["C"], what: qsTr("Calibrate to your presses") },
                             { keys: ["F"], what: qsTr("Force Click on or off") },
                             { keys: ["P"], what: qsTr("Pause the chart") },
-                            { keys: ["R"], what: qsTr("Reset everything") },
+                            { keys: ["R"], what: qsTr("Reset everything to Medium") },
                             { keys: ["Ctrl", "Z"], what: qsTr("Undo") },
                             { keys: ["Ctrl", "Shift", "Z"], what: qsTr("Redo") },
                             { keys: ["?"], what: qsTr("Show or hide this") },

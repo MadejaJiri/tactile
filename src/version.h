@@ -1,3 +1,3 @@
 #pragma once
 
-#define TACTILE_VERSION "0.1.0"
+#define TACTILE_VERSION "0.2.0"

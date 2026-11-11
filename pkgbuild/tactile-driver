@@ -1,21 +1,26 @@
 #!/bin/bash
 # tactile-driver: which hid-magicmouse is in use, and switching it without a reboot.
 #
-#   tactile-driver status     what is installed, what is loaded
-#   tactile-driver reload     load the installed driver now (root)
-#   tactile-driver stock      the kernel's own driver until the next boot (root)
-#   tactile-driver repair     find the actuator again if it is missing (root)
-#
-# The actuator is the part under the trackpad that makes the click. On some
-# boots the controller does not list it, and then only the trackpad's firmware
-# can play the click. Probing the controller again brings it back; `repair`
-# does that. It pauses keyboard and trackpad for two seconds, and it once
-# froze the whole machine for four minutes instead, so save your work first.
+#   tactile-driver status           what is installed, what is loaded
+#   tactile-driver reload           load the installed driver now (root)
+#   tactile-driver reload --probe   the same, and probe the controller again
+#   tactile-driver stock            the kernel's own driver until the next boot (root)
+#   tactile-driver repair           find the actuator again if it is missing (root)
+#   tactile-driver boot-repair on|off
+#                                   run `repair` at every boot that needs it (root)
 #
 # A reboot does the same as `reload`: Tactile's driver is the one the system
-# loads once DKMS has built it. Switching by hand pauses the keyboard and the
-# trackpad for about two seconds, because both hang off one SPI device that
-# has to be probed again.
+# loads once DKMS has built it. `reload` swaps only the trackpad's driver, so
+# the trackpad pauses for a moment and the keyboard keeps working.
+#
+# The actuator is the part under the trackpad that makes the click. On some
+# boots the kernel does not find it, and then only the trackpad's firmware
+# can play the click. Probing the trackpad's controller again brings it back:
+# that is `repair`, and what `--probe` and `stock` do as well. It pauses the
+# keyboard and the trackpad for two seconds, and on the one machine this was
+# written on it once froze everything for four minutes instead. So it is
+# never done unasked: save your work first, and turn `boot-repair` on only if
+# you accept that risk at every boot that misses the actuator.
 set -euo pipefail
 
 KERNEL="$(uname -r)"
@@ -99,6 +104,7 @@ status() {
 	if command -v dkms >/dev/null 2>&1; then
 		echo "dkms       $(dkms status tactile 2>/dev/null | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
 	fi
+	echo "boot       $(if systemctl is-enabled --quiet tactile-actuator.service 2>/dev/null; then echo "repairs a missing actuator (tactile-driver boot-repair off)"; else echo "does not repair a missing actuator (see: tactile-driver help)"; fi)"
 	if systemctl is-active --quiet tactiled.service 2>/dev/null; then
 		echo "service    running"
 	else
@@ -128,8 +134,9 @@ load_stock() {
 	insmod "$STOCK"
 }
 
+# $2 is "probe" to probe the controller again afterwards.
 swap() {
-	local want="$1" device=""
+	local want="$1" probe="${2:-}" device=""
 	echo "$MARK" >/dev/kmsg 2>/dev/null || true
 
 	device="$(spi_device)"
@@ -147,11 +154,15 @@ swap() {
 		want=failed
 	fi
 
-	[ -z "$device" ] || rebind "$device"
+	if [ "$probe" = probe ] && [ -n "$device" ]; then
+		rebind "$device"
+	fi
 	[ "$want" != failed ] || exit 1
 }
 
 reload() {
+	local probe=""
+	[ "${1:-}" != --probe ] || probe=probe
 	need_root reload
 	case "$(installed)" in
 	*/updates/*) ;;
@@ -162,7 +173,7 @@ reload() {
 		exit 1
 		;;
 	esac
-	swap tactile
+	swap tactile "$probe"
 	if [ "$(running)" != tactile ]; then
 		echo "tactile-driver: the kernel's own driver loaded instead." >&2
 		exit 1
@@ -206,7 +217,9 @@ stock() {
 		echo "tactile-driver: kernel $KERNEL has no hid-magicmouse of its own." >&2
 		exit 1
 	fi
-	swap stock
+	# The kernel's own driver starts from a freshly probed controller, as it
+	# would at boot.
+	swap stock probe
 	echo "OK: the kernel's own driver is loaded until the next boot; the trackpad's firmware plays the click."
 }
 
@@ -238,14 +251,37 @@ repair() {
 	exit 1
 }
 
+boot_repair() {
+	case "${1:-}" in
+	on)
+		need_root "boot-repair on"
+		systemctl enable tactile-actuator.service
+		echo "On: a boot that misses the actuator probes the controller again."
+		;;
+	off)
+		need_root "boot-repair off"
+		systemctl disable tactile-actuator.service
+		echo "Off: a boot that misses the actuator leaves the click to the firmware."
+		;;
+	"")
+		if systemctl is-enabled --quiet tactile-actuator.service 2>/dev/null; then echo on; else echo off; fi
+		;;
+	*)
+		echo "tactile-driver: boot-repair takes on or off" >&2
+		exit 1
+		;;
+	esac
+}
+
 case "${1:-status}" in
 status) status ;;
-reload) reload ;;
+reload) reload "${2:-}" ;;
 stock) stock ;;
 repair) repair ;;
--h | --help | help) sed -n '2,18s/^# \{0,1\}//p' "$0" ;;
+boot-repair) boot_repair "${2:-}" ;;
+-h | --help | help) sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//p}' "$0" ;;
 *)
-	echo "tactile-driver: unknown command \"$1\" (status, reload, stock, repair)" >&2
+	echo "tactile-driver: unknown command \"$1\" (status, reload, stock, repair, boot-repair)" >&2
 	exit 1
 	;;
 esac

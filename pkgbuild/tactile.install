@@ -5,7 +5,7 @@ in use from the next boot. To finish:
 
   sudo systemctl enable --now tactiled    keeps and applies the click settings
   sudo tactile-driver reload              use the new driver now, without a reboot
-                                          (keyboard and trackpad pause for two seconds)
+                                          (the trackpad pauses for a moment)
 
 Then open Tactile from the launcher, or run: tactile status
 EOF

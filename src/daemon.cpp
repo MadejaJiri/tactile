@@ -48,6 +48,10 @@ Daemon::Daemon(const Options &options, QObject *parent)
         broadcast();
     });
 
+    m_tuneTimer.setSingleShot(true);
+    m_tuneTimer.setTimerType(Qt::PreciseTimer);
+    connect(&m_tuneTimer, &QTimer::timeout, this, &Daemon::playNote);
+
     connect(&m_server, &QLocalServer::newConnection, this, &Daemon::accept);
     connect(&m_trackpad, &Trackpad::sample, this, [this](int pressure, int fingers, bool button) {
         if (m_retrying) {
@@ -249,6 +253,25 @@ QJsonObject Daemon::handle(QLocalSocket *socket, const QJsonObject &request) {
         return error.isEmpty() ? success() : failure(error);
     }
 
+    if (command == "tune") {
+        // An empty name stops the one playing.
+        const QString name = request.value("name").toString();
+        m_tuneTimer.stop();
+        m_tune.clear();
+        if (name.isEmpty())
+            return success();
+        const Tunes::Tune *tune = Tunes::find(name);
+        if (!tune)
+            return failure(QStringLiteral("no tune called \"%1\" (there are: %2)").arg(name, Tunes::names().join(", ")));
+        if (m_kind != Driver::Patched || owner() != "host")
+            return failure("A tune needs Tactile's driver to be playing the click.");
+        if (m_holder)
+            return failure("Not while the click is being calibrated.");
+        m_tune = tune->notes;
+        playNote();
+        return success();
+    }
+
     if (command == "hold") {
         if (m_kind != Driver::Patched)
             return failure("The kernel's own trackpad driver is loaded.");
@@ -288,6 +311,8 @@ QJsonObject Daemon::state() const {
         {"preset", m_settings.preset()},
         {"defaults", defaults},
         {"errors", QJsonArray::fromStringList(m_errors)},
+        {"outdated", m_driver.outdated(m_settings)},
+        {"tunes", QJsonArray::fromStringList(Tunes::names())},
     };
 }
 
@@ -326,6 +351,20 @@ void Daemon::save() {
         return;
     file.write(QJsonDocument(m_settings.toJson()).toJson());
     file.commit();
+}
+
+void Daemon::playNote() {
+    if (m_tune.isEmpty())
+        return;
+    const Tunes::Note note = m_tune.takeFirst();
+    // A note the driver will not play ends the tune: the rest would fail too.
+    if (!m_trackpad.click(note.kind, note.intensity).isEmpty()) {
+        m_tune.clear();
+        return;
+    }
+    if (m_tune.isEmpty())
+        return;
+    m_tuneTimer.start(qMax(40, m_tune.first().at - note.at));
 }
 
 void Daemon::apply() {

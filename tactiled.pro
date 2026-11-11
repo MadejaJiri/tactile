@@ -8,6 +8,7 @@ HEADERS += \
     src/daemon.h \
     src/driver.h \
     src/settings.h \
+    src/tunes.h \
     src/trackpad.h \
     src/version.h
 

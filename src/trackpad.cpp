@@ -195,7 +195,7 @@ void Trackpad::eraseEffect() {
         close();
 }
 
-QString Trackpad::click(const QString &kind) {
+QString Trackpad::click(const QString &kind, int intensity) {
 #ifdef FF_HAPTIC
     const quint16 usage = kind == "release" ? WaveformRelease : kind == "force" ? WaveformDeepClick : WaveformPress;
     if (!open())
@@ -209,7 +209,7 @@ QString Trackpad::click(const QString &kind) {
     effect.type = FF_HAPTIC;
     effect.id = -1;
     effect.u.haptic.hid_usage = usage;
-    effect.u.haptic.intensity = 100;  // percent of the configured strength
+    effect.u.haptic.intensity = quint16(qBound(1, intensity, 100));  // percent of the configured strength
     if (ioctl(m_fd, EVIOCSFF, &effect) < 0)
         return QStringLiteral("The driver did not take the waveform (%1).").arg(QString::fromLocal8Bit(strerror(errno)));
     m_effect = effect.id;
@@ -230,6 +230,7 @@ QString Trackpad::click(const QString &kind) {
     return {};
 #else
     Q_UNUSED(kind)
+    Q_UNUSED(intensity)
     return QStringLiteral("Built without haptic force-feedback support.");
 #endif
 }

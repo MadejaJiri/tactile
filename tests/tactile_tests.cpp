@@ -34,7 +34,7 @@ QByteArray readFile(const QString &path) {
 
 // A directory that looks like /sys/module/hid_magicmouse on its built-in
 // defaults. The kernel's own module lacks the options Tactile's adds.
-QString fakeModule(const QString &root, bool patched) {
+QString fakeModule(const QString &root, bool patched, bool current = true) {
     const QString directory = root + "/module";
     QDir(directory).removeRecursively();
     const QList<QPair<QString, QByteArray>> stock{
@@ -47,7 +47,16 @@ QString fakeModule(const QString &root, bool patched) {
         {"haptic_deep_strength", "0"},  {"haptic_deep_softness", "0"},
         {"haptic_deep_waveform", "Y"},  {"haptic_deep_pulses", "1"},
         {"haptic_deep_gap_ms", "15"}};
-    for (const auto &[name, value] : stock + (patched ? added : QList<QPair<QString, QByteArray>>()))
+    // What Tactile 0.2 added to its driver.
+    const QList<QPair<QString, QByteArray>> newer{
+        {"haptic_finger_extra", "0"}, {"haptic_one_finger", "N"},
+        {"haptic_release_strength", "0"}, {"haptic_deep_keycode", "0"}};
+    QList<QPair<QString, QByteArray>> all = stock;
+    if (patched)
+        all += added;
+    if (patched && current)
+        all += newer;
+    for (const auto &[name, value] : all)
         writeFile(directory + "/parameters/" + name, value + "\n");
     return directory;
 }
@@ -98,13 +107,14 @@ private slots:
 
     // ---- Settings ---------------------------------------------------------
 
-    void settingsStartOnTheLightPreset() {
+    void settingsStartOnTheMediumPreset() {
         const Settings settings;
-        QCOMPARE(settings.preset(), QString("light"));
+        QCOMPARE(settings.preset(), QString("medium"));
         QCOMPARE(settings.value("hostClick"), 1);
-        QCOMPARE(settings.value("press"), 60);
-        QCOMPARE(settings.value("release"), 35);
-        QCOMPARE(settings.value("forceClick"), 0);
+        QCOMPARE(settings.value("press"), 120);
+        QCOMPARE(settings.value("release"), 110);
+        QCOMPARE(settings.value("strength"), 105);
+        QCOMPARE(settings.value("forceKey"), 0);
     }
 
     void settingsClampIntoTheirRanges() {
@@ -130,7 +140,7 @@ private slots:
         settings.normalize();
         // A click ends below where it starts; Force Click sits above it and
         // lets go between the two.
-        QCOMPARE(settings.value("release"), 90);
+        QCOMPARE(settings.value("release"), 95);
         QCOMPARE(settings.value("force"), 160);
         QCOMPARE(settings.value("forceRelease"), 130);
 
@@ -139,24 +149,58 @@ private slots:
         QCOMPARE(settings.value("forceRelease"), 110);
     }
 
-    void presetsChangeOnlyTheClick() {
+    void presetsCarryTheirFeedback() {
         Settings settings;
         settings.set("strength", 77);
+        settings.set("pressPulses", 2);
         QVERIFY(settings.applyPreset("firm"));
         QCOMPARE(settings.value("press"), 200);
         QCOMPARE(settings.value("release"), 130);
-        QCOMPARE(settings.value("strength"), 77);
+        // A firm click gets a strong pulse; how many pulses is left alone.
+        QCOMPARE(settings.value("strength"), 200);
+        QCOMPARE(settings.value("pressPulses"), 2);
         QCOMPARE(settings.preset(), QString("firm"));
+        QCOMPARE(settings.feel(), QString("firm"));
 
         QVERIFY(settings.applyPreset("firmware"));
         QCOMPARE(settings.value("hostClick"), 0);
         QCOMPARE(settings.value("press"), 200);
         QCOMPARE(settings.preset(), QString("firmware"));
+        // What the click was set to is still there for when Tactile is back.
+        QCOMPARE(settings.feel(), QString("firm"));
 
         QVERIFY(settings.applyPreset("medium"));
         settings.set("press", 77);
         QCOMPARE(settings.preset(), QString());
         QVERIFY(!settings.applyPreset("nonsense"));
+    }
+
+    void feedbackFollowsTheClickPressure() {
+        // The presets themselves, and straight lines between and beyond them.
+        QCOMPARE(Settings::suggestedStrength(60), 65);
+        QCOMPARE(Settings::suggestedStrength(120), 105);
+        QCOMPARE(Settings::suggestedStrength(200), 200);
+        QCOMPARE(Settings::suggestedStrength(90), 85);
+        QCOMPARE(Settings::suggestedStrength(160), 155);
+        QCOMPARE(Settings::suggestedStrength(20), 40);
+        QCOMPARE(Settings::suggestedStrength(400), 255);
+        // A tenth under the click, and never closer than the least gap.
+        QCOMPARE(Settings::suggestedRelease(120), 108);
+        QCOMPARE(Settings::suggestedRelease(20), 15);
+    }
+
+    void forceClickHoldsOnlyAKeyItHas() {
+        Settings settings;
+        settings.set("forceKey", 30);  // the letter A: not one to hold down
+        settings.normalize();
+        QCOMPARE(settings.value("forceKey"), 0);
+        settings.set("forceKey", Settings::FirstForceKey);
+        settings.normalize();
+        QCOMPARE(settings.value("forceKey"), 183);
+        // F21 would switch the touchpad off in most layouts.
+        settings.set("forceKey", 191);
+        settings.normalize();
+        QCOMPARE(settings.value("forceKey"), 189);
     }
 
     void mergeTakesWholeNumbersOnly() {
@@ -165,7 +209,7 @@ private slots:
         QVERIFY(!settings.merge({{"press", "hard"}}, &error));
         QVERIFY(error.contains("press"));
         QVERIFY(!settings.merge({{"press", 80.5}}));
-        QCOMPARE(settings.value("press"), 60);
+        QCOMPARE(settings.value("press"), 120);
 
         QVERIFY(settings.merge({{"press", 90}, {"forceClick", true}, {"somethingElse", 4}}));
         QCOMPARE(settings.value("press"), 90);
@@ -190,11 +234,11 @@ private slots:
                     return value;
             return -1;
         };
-        QCOMPARE(valueOf("haptic_deep_threshold"), 0);
-        settings.set("forceClick", 1);
-        parameters = settings.parameters();
         QCOMPARE(valueOf("haptic_deep_threshold"), 500);
-        QCOMPARE(valueOf("haptic_press_threshold"), 60);
+        QCOMPARE(valueOf("haptic_press_threshold"), 120);
+        settings.set("forceClick", 0);
+        parameters = settings.parameters();
+        QCOMPARE(valueOf("haptic_deep_threshold"), 0);
     }
 
     // ---- Driver -----------------------------------------------------------
@@ -330,8 +374,9 @@ private slots:
             Daemon daemon(options);
             QString error;
             QVERIFY2(daemon.start(&error), qPrintable(error));
-            // A first start puts the Light preset in place.
-            QCOMPARE(readFile(parameters + "haptic_press_threshold"), QByteArray("60"));
+            // A first start puts the Medium preset in place.
+            QCOMPARE(readFile(parameters + "haptic_press_threshold"), QByteArray("120"));
+            QCOMPARE(readFile(parameters + "haptic_strength"), QByteArray("105"));
             QCOMPARE(readFile(parameters + "haptic_press"), QByteArray("1"));
 
             Link link(options.socket);
@@ -343,7 +388,13 @@ private slots:
             QJsonObject state = reply.value("state").toObject();
             QCOMPARE(state.value("module").toString(), QString("patched"));
             QCOMPARE(state.value("owner").toString(), QString("host"));
-            QCOMPARE(state.value("preset").toString(), QString("light"));
+            QCOMPARE(state.value("preset").toString(), QString("medium"));
+            QVERIFY(!state.value("outdated").toBool());
+            QVERIFY(state.value("tunes").toArray().contains("heartbeat"));
+            // A rhythm it does not know is refused by name.
+            reply = ask(link, {{"cmd", "tune"}, {"name", "nonsense"}});
+            QVERIFY(!reply.value("ok").toBool(true));
+            QVERIFY(reply.value("error").toString().contains("heartbeat"));
 
             reply = ask(link, {{"cmd", "set"}, {"settings", QJsonObject{{"press", 90}, {"forceClick", 1}}}});
             QVERIFY(reply.value("ok").toBool());
@@ -379,6 +430,41 @@ private slots:
         QCOMPARE(readFile(parameters + "haptic_press"), QByteArray("1"));
     }
 
+    void anOlderDriverTakesWhatItKnows() {
+        // Tactile was updated but the module from before is still loaded: it
+        // lacks the newer options. That is not an error, and it is said.
+        QTemporaryDir dir;
+        const QString module = fakeModule(dir.path(), true, false);
+        const Driver driver(module);
+        Settings settings;
+        settings.set("fingerExtra", 40);
+        QVERIFY(driver.apply(settings).isEmpty());
+        QVERIFY(driver.outdated(settings));
+        QCOMPARE(driver.read("haptic_press_threshold"), 120);
+        QVERIFY(!QFile::exists(module + "/parameters/haptic_finger_extra"));
+
+        QTemporaryDir other;
+        QVERIFY(!Driver(fakeModule(other.path(), true)).outdated(settings));
+        QVERIFY(!Driver(fakeModule(other.path(), false)).outdated(settings));
+    }
+
+    void tunesAreInOrderAndPlayable() {
+        QVERIFY(Tunes::names().size() >= 3);
+        for (const auto &tune : Tunes::all()) {
+            QVERIFY(!tune.notes.isEmpty());
+            int at = -1000;
+            for (const auto &note : tune.notes) {
+                // Far enough apart for the actuator, and something it has.
+                QVERIFY2(note.at - at >= 40, tune.name);
+                QVERIFY(QStringList({"press", "release", "force"}).contains(note.kind));
+                QVERIFY(note.intensity >= 1 && note.intensity <= 100);
+                at = note.at;
+            }
+        }
+        QVERIFY(Tunes::find("knock"));
+        QVERIFY(!Tunes::find("nonsense"));
+    }
+
     void daemonReleasesTheHoldWhenTheAppGoesAway() {
         QTemporaryDir dir;
         const QString module = fakeModule(dir.path(), true);
@@ -394,7 +480,7 @@ private slots:
             QVERIFY(readFile(module + "/parameters/haptic_press_threshold").toInt() > 1500);
         }
         // A crashed window must not leave a trackpad that cannot click.
-        QTRY_COMPARE(readFile(module + "/parameters/haptic_press_threshold"), QByteArray("60"));
+        QTRY_COMPARE(readFile(module + "/parameters/haptic_press_threshold"), QByteArray("120"));
     }
 
     void daemonKeepsAClickSetUpByHand() {
@@ -459,7 +545,7 @@ private slots:
         QTRY_VERIFY(backend.connected());
         QTRY_COMPARE(backend.module(), QString("patched"));
         QCOMPARE(backend.problem(), QString());
-        QCOMPARE(backend.preset(), QString("light"));
+        QCOMPARE(backend.preset(), QString("medium"));
 
         backend.applyPreset("firm");
         QTRY_COMPARE(readFile(module + "/parameters/haptic_press_threshold"), QByteArray("200"));
@@ -533,7 +619,7 @@ private slots:
 
     void calibrationMeasuresAGlideAndFivePresses() {
         Backend backend(true);
-        QCOMPARE(backend.settings().value("press").toInt(), 60);
+        QCOMPARE(backend.settings().value("press").toInt(), 120);
         backend.startCalibration();
         QCOMPARE(backend.calibrationStep(), int(Backend::Glide));
 
@@ -556,27 +642,33 @@ private slots:
         QCOMPARE(backend.calibrationStep(), int(Backend::Done));
         QCOMPARE(backend.calibrationResult(), 75);
         QCOMPARE(backend.settings().value("press").toInt(), 75);
-        QCOMPARE(backend.settings().value("release").toInt(), 45);
+        // The release and the feedback are what suits that pressure.
+        QCOMPARE(backend.settings().value("release").toInt(), 68);
+        QCOMPARE(backend.settings().value("strength").toInt(), 75);
         QCOMPARE(backend.preset(), QString());
 
         backend.closeCalibration();
         QCOMPARE(backend.calibrationStep(), int(Backend::Idle));
         QVERIFY(backend.canUndo());
         backend.undo();
-        QCOMPARE(backend.settings().value("press").toInt(), 60);
-        QCOMPARE(backend.settings().value("release").toInt(), 35);
+        QCOMPARE(backend.settings().value("press").toInt(), 120);
+        QCOMPARE(backend.settings().value("release").toInt(), 110);
+        QCOMPARE(backend.settings().value("strength").toInt(), 105);
     }
 
     void aLighterClickTakesItsReleaseAlong() {
         Backend backend(true);
-        backend.set("press", 120);
-        QCOMPARE(backend.settings().value("press").toInt(), 120);
-        QCOMPARE(backend.settings().value("release").toInt(), 70);
+        backend.set("press", 60);
+        QCOMPARE(backend.settings().value("press").toInt(), 60);
+        QCOMPARE(backend.settings().value("release").toInt(), 55);
+        // The feedback is the user's to change: only offered, never moved.
+        QCOMPARE(backend.settings().value("strength").toInt(), 105);
+        QCOMPARE(backend.suggestedStrength(), 65);
         // One drag of a slider is one step to undo.
         backend.set("press", 130);
         backend.set("press", 140);
         backend.undo();
-        QCOMPARE(backend.settings().value("press").toInt(), 60);
+        QCOMPARE(backend.settings().value("press").toInt(), 120);
         QVERIFY(!backend.canUndo());
         backend.redo();
         QCOMPARE(backend.settings().value("press").toInt(), 140);

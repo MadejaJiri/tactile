@@ -13,6 +13,7 @@
 
 #include "link.h"
 #include "settings.h"
+#include "tunes.h"
 #include "version.h"
 
 namespace {
@@ -43,6 +44,7 @@ Commands that need no display:
   preset <name>             light, medium, firm, or firmware
   click [press|release|force]
                             play one click on the trackpad
+  tune [name]               play a rhythm on the trackpad; no name lists them
   watch [--seconds N]       print the pressure as it changes
   keys                      every setting with its range and default
   skill [install]           print or install the agent skill
@@ -73,6 +75,9 @@ bool report(const QJsonObject &state) {
                                "until Tactile's is (sudo tactile-driver reload, or reboot)." << Qt::endl;
     else if (state.value("module").toString() == "missing")
         QTextStream(stderr) << "tactile: saved, but no trackpad driver is loaded." << Qt::endl;
+    else if (state.value("outdated").toBool())
+        QTextStream(stderr) << "tactile: saved, but the loaded driver is older than this Tactile and lacks some "
+                               "settings; the new one takes over at the next boot." << Qt::endl;
     else if (state.value("owner").toString() == "noactuator")
         QTextStream(stderr) << "tactile: the trackpad's actuator was not found at this boot, so its firmware still "
                                "plays the click (sudo tactile-driver repair)." << Qt::endl;
@@ -149,6 +154,15 @@ int set(const QStringList &arguments, bool json) {
             return fail(QStringLiteral("unknown setting \"%1\" (see: tactile keys)").arg(argument));
         bool number;
         int value = text.toInt(&number);
+        // The Force Click key by its name: f13 to f19, or none.
+        if (key == "forceKey" && text == "none")
+            value = 0, number = true;
+        else if (key == "forceKey" && text.startsWith('f')) {
+            const int f = text.mid(1).toInt(&number);
+            value = Settings::FirstForceKey + f - 13;
+            number = number && f >= 13 && f <= 19;
+        } else if (key == "forceKey" && number && value != 0 && value < Settings::FirstForceKey)
+            return fail("forceKey is none, or f13 to f19");
         if (text == "on" || text == "true" || text == "yes")
             value = 1, number = true;
         else if (text == "off" || text == "false" || text == "no")
@@ -206,6 +220,24 @@ int click(const QStringList &arguments, bool json) {
     return 0;
 }
 
+int tune(const QStringList &arguments, bool json) {
+    if (arguments.isEmpty()) {
+        if (json)
+            printJson({{"tunes", QJsonArray::fromStringList(Tunes::names())}});
+        else
+            out() << Tunes::names().join("\n") << Qt::endl;
+        return 0;
+    }
+    const QString name = arguments.first() == "stop" ? QString() : arguments.first();
+    bool ok;
+    ask({{"cmd", "tune"}, {"name", name}}, &ok);
+    if (!ok)
+        return 1;
+    if (json)
+        printJson({{"playing", name}});
+    return 0;
+}
+
 int watch(QStringList arguments, bool json) {
     double seconds = 0;
     const int at = arguments.indexOf("--seconds");
@@ -260,12 +292,16 @@ int keys(bool json) {
         QJsonObject all;
         for (const auto &field : Settings::fields())
             all.insert(field.key, QJsonObject{{"minimum", field.minimum}, {"maximum", field.maximum},
-                                              {"default", field.fallback}});
+                                              {"default", field.fallback}, {"about", field.about}});
         printJson(all);
         return 0;
     }
     for (const auto &field : Settings::fields())
-        out() << QString("%1 %2..%3 (default %4)").arg(field.key, -15).arg(field.minimum).arg(field.maximum).arg(field.fallback)
+        out() << QString("%1 %2 %3  %4")
+                     .arg(field.key, -16)
+                     .arg(QString("%1..%2").arg(field.minimum).arg(field.maximum), -9)
+                     .arg(QString("(default %1)").arg(field.fallback), -13)
+                     .arg(field.about)
               << "\n";
     out().flush();
     return 0;
@@ -304,7 +340,7 @@ int skill(const QStringList &arguments, bool json) {
 }  // namespace
 
 bool isCommand(const QString &word) {
-    static const QStringList words{"status", "get", "set", "preset", "click", "watch", "keys", "skill",
+    static const QStringList words{"status", "get", "set", "preset", "click", "tune", "watch", "keys", "skill",
                                    "help", "-h", "--help", "-v", "--version", "--json"};
     return words.contains(word);
 }
@@ -333,6 +369,8 @@ int runCommand(const QStringList &all) {
         return preset(arguments, json);
     if (command == "click")
         return click(arguments, json);
+    if (command == "tune")
+        return tune(arguments, json);
     if (command == "watch")
         return watch(arguments, json);
     if (command == "keys")

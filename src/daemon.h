@@ -11,6 +11,7 @@
 
 #include "driver.h"
 #include "settings.h"
+#include "tunes.h"
 #include "trackpad.h"
 
 // tactiled: the one privileged piece. It keeps the click settings, writes
@@ -63,6 +64,7 @@ private:
     void updateWatching();
     void hold(QLocalSocket *socket, bool on);
     void retry();
+    void playNote();
 
     Options m_options;
     Settings m_settings;
@@ -83,5 +85,6 @@ private:
 
     int m_kernelLog = -1;
     std::unique_ptr<QSocketNotifier> m_kernelLogNotifier;
-    QTimer m_saveTimer, m_pollTimer, m_holdTimer, m_retryTimer;
+    QList<Tunes::Note> m_tune;  // what is left of the tune being played
+    QTimer m_saveTimer, m_pollTimer, m_holdTimer, m_retryTimer, m_tuneTimer;
 };

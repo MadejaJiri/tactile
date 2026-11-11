@@ -31,6 +31,10 @@ public:
     // would vibrate twice per press with the same values.
     QStringList apply(const Settings &settings) const;
 
+    // True when the loaded module is Tactile's but from before some of these
+    // settings existed. They take effect once the installed one is loaded.
+    bool outdated(const Settings &settings) const;
+
     // True when the driver is asked to play the click itself. Whether the
     // trackpad went along is in the kernel log, which the daemon follows.
     bool hostClick() const { return read("haptic_press") == 1; }

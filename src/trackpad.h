@@ -52,8 +52,9 @@ public:
     bool watching() const { return m_watching; }
 
     // Plays one waveform through the driver ("press", "release" or "force"),
-    // at the strength and softness it is set to. Empty on success.
-    QString click(const QString &kind);
+    // at the softness it is set to and a percentage of its strength. Empty on
+    // success.
+    QString click(const QString &kind, int intensity = 100);
 
 signals:
     void sample(int pressure, int fingers, bool button);

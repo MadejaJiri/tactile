@@ -118,6 +118,25 @@ static u16 haptic_debounce_ms = 40;
 module_param(haptic_debounce_ms, ushort, 0644);
 MODULE_PARM_DESC(haptic_debounce_ms, "ms the pressure must stay low to end a click, and the gap before the next one (default 40)");
 
+/*
+ * Local patch: the click is derived from the pressure of all fingers together,
+ * so two fingers resting on the pad to scroll press twice as hard as one and
+ * can click without meaning to. Each finger beyond the first raises every
+ * threshold by haptic_finger_extra; haptic_one_finger keeps a click from
+ * starting at all while more than one finger is down.
+ */
+static u16 haptic_finger_extra;
+module_param(haptic_finger_extra, ushort, 0644);
+MODULE_PARM_DESC(haptic_finger_extra, "pressure added to the click thresholds for each finger beyond the first (default 0)");
+
+static bool haptic_one_finger;
+module_param(haptic_one_finger, bool, 0644);
+MODULE_PARM_DESC(haptic_one_finger, "start a click only while exactly one finger is on the pad (default off)");
+
+static u8 haptic_release_strength;
+module_param(haptic_release_strength, byte, 0644);
+MODULE_PARM_DESC(haptic_release_strength, "strength of the release waveform, 1-255 (0: the same as the press)");
+
 static bool haptic_trace;
 module_param(haptic_trace, bool, 0644);
 MODULE_PARM_DESC(haptic_trace, "log every derived click transition to the kernel log (default off)");
@@ -164,12 +183,19 @@ MODULE_PARM_DESC(haptic_deep_gap_ms, "milliseconds between deep-click pulses, 0 
  * choice; nothing is sent unless one is named. It is held down for as long as
  * the deep stage lasts. The key comes from a separate input device: libinput
  * drives a touchpad with its own dispatcher, which drops every key that is not
- * a button, so a key on the trackpad's own device never reaches userspace. It
- * is read at probe because that device is set up there.
+ * a button, so a key on the trackpad's own device never reaches userspace.
+ *
+ * Local patch: that device always exists and offers F13 to F19, keys no
+ * keyboard here has, so the choice can change while the driver runs. Any
+ * other code is ignored. F20 to F23 are left out: keyboard layouts give them
+ * jobs of their own, one of which switches the touchpad off.
  */
+#define HAPTIC_DEEP_KEY_FIRST	KEY_F13
+#define HAPTIC_DEEP_KEY_LAST	KEY_F19
+
 static u16 haptic_deep_keycode;
-module_param(haptic_deep_keycode, ushort, 0444);
-MODULE_PARM_DESC(haptic_deep_keycode, "key code held during a deep click on a separate \"Force Click\" input device, 0 for none (default 0)");
+module_param(haptic_deep_keycode, ushort, 0644);
+MODULE_PARM_DESC(haptic_deep_keycode, "key held during a deep click on a separate \"Force Click\" input device: 183 (F13) to 189 (F19), 0 for none (default 0)");
 
 static u8 haptic_pulse_gap_ms = 25;
 module_param(haptic_pulse_gap_ms, byte, 0644);
@@ -295,6 +321,7 @@ struct effect_job {
  * @haptic_mode_work: Puts the actuator in the mode click feedback needs while
  *                    nothing touches the pad, and checks that it stays there.
  * @force_input: Input device for the deep-click key, NULL if none.
+ * @force_key_down: The deep-click key being held, 0 if none.
  * @haptic_button_down: The host-derived button is pressed.
  * @haptic_deep_down: The host-derived click is in its deep stage.
  * @haptic_touch_ns: Time of the last report with a finger on the pad.
@@ -336,6 +363,7 @@ struct magicmouse_sc {
 	struct work_struct haptic_deep_release_work;
 	struct delayed_work haptic_mode_work;
 	struct input_dev *force_input;
+	u16 force_key_down;
 	bool haptic_button_down;
 	bool haptic_deep_down;
 	u64 haptic_low_since_ns;	/* pressure first fell to the release level */
@@ -968,7 +996,7 @@ static void report_c1fe_finger_data(struct input_dev *input, int slot,
 }
 
 static bool magicmouse_haptic_click(struct magicmouse_sc *msc, u32 pressure,
-				    bool touching, bool firmware_button);
+				    unsigned int fingers, bool firmware_button);
 static void magicmouse_haptic_forget_mode(struct magicmouse_sc *msc);
 
 static void report_finger_data(struct input_dev *input, int slot,
@@ -1064,7 +1092,7 @@ static int magicmouse_raw_event_mtp(struct hid_device *hdev,
 	/* The C1FE report carries no pressure to derive a click from. */
 	input_report_key(input, BTN_MOUSE,
 			 msc->mtp_c1fe ? tp_hdr->buttons & 1 :
-			 magicmouse_haptic_click(msc, pressure, n > 0,
+			 magicmouse_haptic_click(msc, pressure, n,
 						 tp_hdr->buttons & 1));
 
 	input_sync(input);
@@ -1640,6 +1668,8 @@ static void magicmouse_haptic_pulses(struct magicmouse_sc *msc, u16 usage,
 		return;
 
 	strength = magicmouse_haptic_strength(msc->hdev, deep);
+	if (usage == (HID_HP_WAVEFORMRELEASE & HID_USAGE) && haptic_release_strength)
+		strength = haptic_release_strength;
 	softness = magicmouse_haptic_softness(msc->hdev, deep);
 	gap = (deep && haptic_deep_gap_ms) ? haptic_deep_gap_ms
 					   : haptic_pulse_gap_ms;
@@ -1834,10 +1864,28 @@ static void magicmouse_deep_release_worker(struct work_struct *ws)
 
 static void magicmouse_force_key(struct magicmouse_sc *msc, bool down)
 {
+	u16 code = READ_ONCE(haptic_deep_keycode);
+
 	if (!msc->force_input)
 		return;
 
-	input_report_key(msc->force_input, haptic_deep_keycode, down);
+	/*
+	 * Let go of the key that went down, whatever the option says by now, so
+	 * a change in the middle of a press cannot leave one held.
+	 */
+	if (!down) {
+		if (!msc->force_key_down)
+			return;
+		code = msc->force_key_down;
+		msc->force_key_down = 0;
+	} else {
+		if (msc->force_key_down ||
+		    code < HAPTIC_DEEP_KEY_FIRST || code > HAPTIC_DEEP_KEY_LAST)
+			return;
+		msc->force_key_down = code;
+	}
+
+	input_report_key(msc->force_input, code, down);
 	input_sync(msc->force_input);
 }
 
@@ -1867,9 +1915,11 @@ static void magicmouse_release_worker(struct work_struct *ws)
  * left to the workqueue.
  */
 static bool magicmouse_haptic_click(struct magicmouse_sc *msc, u32 pressure,
-				    bool touching, bool firmware_button)
+				    unsigned int fingers, bool firmware_button)
 {
+	bool touching = fingers > 0;
 	bool host_mode;
+	u32 extra;
 	u64 now;
 
 	if (!msc->haptics || !msc->haptics->wq)
@@ -1924,18 +1974,23 @@ static bool magicmouse_haptic_click(struct magicmouse_sc *msc, u32 pressure,
 	 * enough to reach the deep stage at once still clicks twice, a frame
 	 * apart.
 	 */
+	/* What the fingers beyond the first add to every threshold. */
+	extra = fingers > 1 ? (fingers - 1) * (u32)haptic_finger_extra : 0;
+
 	if (!msc->haptic_button_down) {
-		if (pressure >= haptic_press_threshold &&
+		if (haptic_one_finger && fingers > 1) {
+			/* A second finger only joins a click, it never starts one. */
+		} else if (pressure >= haptic_press_threshold + extra &&
 		    now - msc->haptic_released_ns >= (u64)haptic_debounce_ms * NSEC_PER_MSEC) {
 			msc->haptic_button_down = true;
 			msc->haptic_low_since_ns = 0;
 			if (haptic_trace)
 				hid_info(msc->hdev, "click DOWN p=%u\n", pressure);
 			queue_work(msc->haptics->wq, &msc->haptic_press_work);
-		} else if (haptic_trace && pressure >= haptic_press_threshold) {
+		} else if (haptic_trace && pressure >= haptic_press_threshold + extra) {
 			hid_info(msc->hdev, "click DOWN suppressed (too soon after release) p=%u\n", pressure);
 		}
-	} else if (pressure <= haptic_release_threshold) {
+	} else if (pressure <= haptic_release_threshold + extra) {
 		if (!msc->haptic_low_since_ns)
 			msc->haptic_low_since_ns = now;
 
@@ -1964,14 +2019,15 @@ static bool magicmouse_haptic_click(struct magicmouse_sc *msc, u32 pressure,
 			hid_info(msc->hdev, "dip ignored p=%u\n", pressure);
 		msc->haptic_low_since_ns = 0;
 	} else if (!msc->haptic_deep_down) {
-		if (haptic_deep_threshold && pressure >= haptic_deep_threshold) {
+		if (haptic_deep_threshold &&
+		    pressure >= haptic_deep_threshold + extra) {
 			msc->haptic_deep_down = true;
 			hid_dbg(msc->hdev, "deep click at pressure %u\n", pressure);
 			queue_work(msc->haptics->wq, &msc->haptic_deep_work);
 			magicmouse_force_key(msc, true);
 		}
 	} else if (pressure <= min(haptic_deep_release_threshold,
-				   haptic_deep_threshold)) {
+				   haptic_deep_threshold) + extra) {
 		msc->haptic_deep_down = false;
 		hid_dbg(msc->hdev, "deep release at pressure %u\n", pressure);
 		queue_work(msc->haptics->wq, &msc->haptic_deep_release_work);
@@ -2007,7 +2063,7 @@ static void magicmouse_haptic_forget_mode(struct magicmouse_sc *msc)
 }
 #else
 static bool magicmouse_haptic_click(struct magicmouse_sc *msc, u32 pressure,
-				    bool touching, bool firmware_button)
+				    unsigned int fingers, bool firmware_button)
 {
 	return firmware_button;
 }
@@ -2383,10 +2439,8 @@ static void magicmouse_setup_force_input(struct magicmouse_sc *msc)
 {
 	struct hid_device *hdev = msc->hdev;
 	struct input_dev *input;
+	unsigned int code;
 	int ret;
-
-	if (haptic_deep_keycode > KEY_MAX)
-		return;
 
 	input = devm_input_allocate_device(&hdev->dev);
 	if (!input)
@@ -2403,7 +2457,8 @@ static void magicmouse_setup_force_input(struct magicmouse_sc *msc)
 	input->id.product = hdev->product;
 	input->id.version = hdev->version;
 	input->dev.parent = &hdev->dev;
-	input_set_capability(input, EV_KEY, haptic_deep_keycode);
+	for (code = HAPTIC_DEEP_KEY_FIRST; code <= HAPTIC_DEEP_KEY_LAST; code++)
+		input_set_capability(input, EV_KEY, code);
 
 	ret = input_register_device(input);
 	if (ret) {
@@ -2452,8 +2507,7 @@ static int apple_taptic_init_mtp(struct magicmouse_sc *msc,
 		  magicmouse_deep_release_worker);
 	INIT_DELAYED_WORK(&msc->haptic_mode_work, magicmouse_haptic_mode_worker);
 
-	if (haptic_deep_keycode)
-		magicmouse_setup_force_input(msc);
+	magicmouse_setup_force_input(msc);
 
 	/* FF_HAPTIC has to be in ffbit before the FF device is created. */
 	input_set_capability(msc->input, EV_FF, FF_HAPTIC);

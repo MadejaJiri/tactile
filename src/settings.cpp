@@ -9,27 +9,54 @@
 // 125, a hard press peaks around 1000.
 //
 // Strength and softness are bytes of the actuator's waveform. 0 means "the
-// driver's default for this trackpad", which differs between models, so that
-// is what a fresh install uses.
+// driver's default for this trackpad", which differs between models.
+//
+// The defaults are the Medium preset, with the feedback its pressure calls
+// for; they were settled by feel on a MacBook Pro 14" (2021).
 const QList<Settings::Field> &Settings::fields() {
     static const QList<Field> list{
-        {"hostClick", 0, 1, 1, "haptic_press"},
-        {"press", 20, 400, 60, "haptic_press_threshold"},
-        {"release", 10, 380, 35, "haptic_release_threshold"},
-        {"debounce", 0, 200, 40, "haptic_debounce_ms"},
-        {"strength", 0, 255, 0, "haptic_strength"},
-        {"softness", 0, 255, 0, "haptic_softness"},
-        {"pressPulses", 0, 4, 1, "haptic_press_pulses"},
-        {"releasePulses", 1, 4, 1, "haptic_release_pulses"},
-        {"pulseGap", 5, 100, 25, "haptic_pulse_gap_ms"},
-        {"forceClick", 0, 1, 0, nullptr},
-        {"force", 150, 1500, 500, "haptic_deep_threshold"},
-        {"forceRelease", 100, 1400, 350, "haptic_deep_release_threshold"},
-        {"forceStrength", 0, 255, 0, "haptic_deep_strength"},
-        {"forceSoftness", 0, 255, 0, "haptic_deep_softness"},
-        {"forceWaveform", 0, 1, 1, "haptic_deep_waveform"},
-        {"forcePulses", 1, 4, 1, "haptic_deep_pulses"},
-        {"forceGap", 5, 100, 15, "haptic_deep_gap_ms"},
+        {"hostClick", 0, 1, 1, "haptic_press",
+         "1: Tactile's driver plays the click. 0: the trackpad's firmware does"},
+        {"press", 20, 400, 120, "haptic_press_threshold",
+         "pressure at which a click starts"},
+        {"release", 10, 395, 110, "haptic_release_threshold",
+         "pressure at which it ends, at least 5 under press"},
+        {"debounce", 0, 200, 1, "haptic_debounce_ms",
+         "ms the pressure must stay low before the click ends"},
+        {"fingerExtra", 0, 300, 0, "haptic_finger_extra",
+         "pressure each finger beyond the first adds to every threshold"},
+        {"oneFinger", 0, 1, 0, "haptic_one_finger",
+         "1: a click starts only with exactly one finger on the pad"},
+        {"strength", 0, 255, 105, "haptic_strength",
+         "strength of the click's pulse (0: the driver's default)"},
+        {"softness", 0, 255, 160, "haptic_softness",
+         "second byte of the pulse's waveform (0: the driver's default)"},
+        {"releaseStrength", 0, 255, 0, "haptic_release_strength",
+         "strength of the pulse on release (0: same as strength)"},
+        {"pressPulses", 0, 4, 1, "haptic_press_pulses",
+         "pulses on press (0: silent)"},
+        {"releasePulses", 1, 4, 1, "haptic_release_pulses",
+         "pulses on release"},
+        {"pulseGap", 5, 100, 25, "haptic_pulse_gap_ms",
+         "ms between those pulses"},
+        {"forceClick", 0, 1, 1, nullptr,
+         "1: a harder press gives a second, deeper click"},
+        {"force", 150, 1500, 500, "haptic_deep_threshold",
+         "pressure at which Force Click starts"},
+        {"forceRelease", 100, 1400, 350, "haptic_deep_release_threshold",
+         "pressure at which it ends"},
+        {"forceStrength", 0, 255, 0, "haptic_deep_strength",
+         "strength of its pulse (0: the driver's default, the maximum)"},
+        {"forceSoftness", 0, 255, 200, "haptic_deep_softness",
+         "second byte of its waveform (0: the driver's default)"},
+        {"forceWaveform", 0, 1, 1, "haptic_deep_waveform",
+         "1: the trackpad's Force Click waveform. 0: the click's"},
+        {"forcePulses", 1, 4, 1, "haptic_deep_pulses",
+         "pulses of a Force Click"},
+        {"forceGap", 5, 100, 15, "haptic_deep_gap_ms",
+         "ms between those pulses"},
+        {"forceKey", 0, LastForceKey, 0, "haptic_deep_keycode",
+         "key held during a Force Click: 0 none, 183 (F13) to 189 (F19)"},
     };
     return list;
 }
@@ -59,46 +86,75 @@ void Settings::normalize() {
     for (const auto &f : fields())
         m_values.insert(f.key, std::clamp(value(f.key), f.minimum, f.maximum));
 
-    // A click has to end below where it starts, with room for the pad's own
-    // shake when the actuator fires.
-    m_values.insert("release", std::min(value("release"), value("press") - 10));
+    // A click has to end below where it starts.
+    m_values.insert("release", std::min(value("release"), value("press") - ReleaseGap));
+    // The key Force Click holds is one of F13 to F19, or none.
+    if (value("forceKey") < FirstForceKey)
+        m_values.insert("forceKey", 0);
     // Force Click sits clearly above the click, and lets go between the two.
     m_values.insert("force", std::max(value("force"), value("press") + 60));
     m_values.insert("forceRelease",
                     std::clamp(value("forceRelease"), value("press") + 10, value("force") - 30));
 }
 
+namespace {
+// How hard a click has to be pressed and what it should feel like belong
+// together: a strong pulse under a light touch feels wrong, and a weak one
+// under a firm press is hardly felt. Each preset carries both.
+struct Preset { const char *name; int press, release, strength; };
+const Preset Presets[] = {
+    {"light", 60, 50, 65},      // about macOS's Light
+    {"medium", 120, 110, 105},  // close to where the firmware's own click sits
+    {"firm", 200, 130, 200},
+};
+constexpr int PresetSoftness = 160;
+}
+
+int Settings::suggestedStrength(int press) {
+    // Straight lines through the presets, carried on past both ends.
+    const int count = int(std::size(Presets));
+    int i = 0;
+    while (i < count - 2 && press > Presets[i + 1].press)
+        i++;
+    const Preset &low = Presets[i], &high = Presets[i + 1];
+    const double slope = double(high.strength - low.strength) / (high.press - low.press);
+    const double strength = low.strength + slope * (press - low.press);
+    return std::clamp(int(std::lround(strength / 5.0)) * 5, 20, 255);
+}
+
+int Settings::suggestedRelease(int press) {
+    return std::max(10, std::min(press - ReleaseGap, int(std::lround(press * 0.9))));
+}
+
 bool Settings::applyPreset(const QString &name) {
-    struct Preset { const char *name; int host, press, release; };
-    static const Preset list[] = {
-        {"light", 1, 60, 35},      // about macOS's Light
-        {"medium", 1, 120, 75},    // the driver's own defaults, close to the firmware's click
-        {"firm", 1, 200, 130},
-        {"firmware", 0, 0, 0},     // the trackpad clicks by itself, as without Tactile
-    };
-    for (const auto &p : list) {
+    if (name == "firmware") {
+        // The trackpad clicks by itself, as without Tactile.
+        m_values.insert("hostClick", 0);
+        return true;
+    }
+    for (const auto &p : Presets) {
         if (name != QLatin1String(p.name))
             continue;
-        m_values.insert("hostClick", p.host);
-        if (p.host) {
-            m_values.insert("press", p.press);
-            m_values.insert("release", p.release);
-        }
+        m_values.insert("hostClick", 1);
+        m_values.insert("press", p.press);
+        m_values.insert("release", p.release);
+        m_values.insert("strength", p.strength);
+        m_values.insert("softness", PresetSoftness);
         normalize();
         return true;
     }
     return false;
 }
 
-QString Settings::preset() const {
-    for (const auto &name : presets()) {
-        Settings candidate = *this;
-        candidate.applyPreset(name);
-        if (candidate == *this)
-            return name;
-    }
+QString Settings::feel() const {
+    for (const auto &p : Presets)
+        if (value("press") == p.press && value("release") == p.release && value("strength") == p.strength
+            && value("softness") == PresetSoftness)
+            return p.name;
     return {};
 }
+
+QString Settings::preset() const { return value("hostClick") ? feel() : QStringLiteral("firmware"); }
 
 QJsonObject Settings::toJson() const { return m_values; }
 

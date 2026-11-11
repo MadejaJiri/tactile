@@ -1,8 +1,8 @@
 # Maintainer: MadejaJiri <https://github.com/MadejaJiri>
 
 pkgname=tactile
-pkgver=0.1.0
-pkgrel=3
+pkgver=0.2.0
+pkgrel=1
 pkgdesc="A light, tunable trackpad click with haptic feedback for Apple Silicon MacBooks: driver, service, and settings app"
 arch=('aarch64')
 url="https://github.com/MadejaJiri/tactile"
@@ -40,8 +40,9 @@ package() {
   chmod 644 "$src/dkms.conf"
 
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 driver/0001-hid-magicmouse-one-click-per-press.patch \
-    "$pkgdir/usr/share/doc/$pkgname/0001-hid-magicmouse-one-click-per-press.patch"
+  install -Dm644 -t "$pkgdir/usr/share/doc/$pkgname" \
+    driver/0001-hid-magicmouse-one-click-per-press.patch \
+    driver/0002-hid-magicmouse-tactile-options.patch
   install -Dm644 "$startdir/tactile.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/tactile.svg"
   install -Dm644 "$startdir/tactile.desktop" "$pkgdir/usr/share/applications/tactile.desktop"
 }

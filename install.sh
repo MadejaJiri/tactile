@@ -117,7 +117,7 @@ elif [ "$PROBLEMS" = 0 ]; then
 	echo "  ..   the installed driver is not the one loaded right now; it takes over at the next boot"
 	answer=n
 	if [ -t 0 ]; then
-		read -r -p "       Switch now? Keyboard and trackpad pause for two seconds. [Y/n] " answer || answer=n
+		read -r -p "       Switch now? The trackpad pauses for a moment. [Y/n] " answer || answer=n
 		answer="${answer:-y}"
 	fi
 	case "$answer" in

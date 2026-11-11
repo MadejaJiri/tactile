@@ -66,9 +66,26 @@ QStringList Driver::apply(const Settings &settings) const {
     for (const auto &[parameter, value] : settings.parameters()) {
         if (read(parameter) == value)
             continue;
+        // A module built before the option existed: not a refusal, see
+        // outdated().
+        if (!QFileInfo::exists(m_directory + "/parameters/" + parameter))
+            continue;
         QString error;
         if (!write(parameter, value, &error))
             errors << error;
     }
     return errors;
+}
+
+bool Driver::outdated(const Settings &settings) const {
+    if (kind() != Patched)
+        return false;
+    for (const auto &[parameter, value] : settings.parameters()) {
+        Q_UNUSED(value)
+        if (!QFileInfo::exists(m_directory + "/parameters/" + parameter))
+            return true;
+    }
+    // The key for Force Click could only be set when the module was loaded.
+    // Read from the mode bits: root, which the daemon is, may write anything.
+    return !QFileInfo(m_directory + "/parameters/haptic_deep_keycode").permission(QFile::WriteOwner);
 }

@@ -1,5 +1,7 @@
 #include "backend.h"
 
+#include "tunes.h"
+
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QJsonArray>
@@ -36,9 +38,8 @@ Backend::Backend(bool demo, QObject *parent) : QObject(parent), m_demo(demo) {
         m_grace = false;
         m_state = {{"module", "patched"}, {"owner", "host"}, {"trackpad", true}, {"kernel", "demo"},
                    {"defaults", QJsonObject{{"strength", 40}, {"softness", 240},
-                                            {"forceStrength", 255}, {"forceSoftness", 208}}}};
-        m_settings.set("forceClick", 1);
-        m_settings.normalize();
+                                            {"forceStrength", 255}, {"forceSoftness", 208}}},
+                   {"tunes", QJsonArray::fromStringList(Tunes::names())}};
         // Start with a window's worth of history, so the first frame already
         // shows what the chart is for.
         m_demoStart = monotonicSeconds() - 8;
@@ -84,6 +85,8 @@ QString Backend::problem() const {
         return "stock";
     if (!m_state.value("trackpad").toBool())
         return "notrackpad";
+    if (m_state.value("outdated").toBool())
+        return "outdated";
     if (owner() == "noactuator")
         return "noactuator";
     if (owner() == "failed")
@@ -291,6 +294,23 @@ void Backend::testClick(const QString &kind) {
         m_clickId = id;
 }
 
+void Backend::matchFeedback() { set("strength", suggestedStrength()); }
+
+QStringList Backend::tunes() const {
+    QStringList list;
+    for (const auto &name : m_state.value("tunes").toArray())
+        list << name.toString();
+    return list;
+}
+
+void Backend::playTune(const QString &name) {
+    if (m_demo || m_step != Idle)
+        return;
+    const int id = m_link.send({{"cmd", "tune"}, {"name", name}});
+    if (id)
+        m_clickId = id;
+}
+
 void Backend::retry() {
     m_link.send({{"cmd", "retry"}});
     say(tr("Lift your fingers, then touch the trackpad once."));
@@ -445,7 +465,9 @@ void Backend::calibrate(const Sample &sample, const Sample &previous) {
     remember({});
     m_settings.set("hostClick", 1);
     m_settings.set("press", m_result);
-    m_settings.set("release", int(std::lround(m_result * .6)));
+    // The feedback goes with the pressure, as in the presets.
+    m_settings.set("release", Settings::suggestedRelease(m_result));
+    m_settings.set("strength", Settings::suggestedStrength(m_result));
     m_settings.normalize();
     changed({});
     emit calibrationChanged();

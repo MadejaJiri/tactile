@@ -27,6 +27,10 @@ class Backend : public QObject {
 
     Q_PROPERTY(QVariantMap settings READ settings NOTIFY settingsChanged)
     Q_PROPERTY(QString preset READ preset NOTIFY settingsChanged)
+    Q_PROPERTY(QString feel READ feel NOTIFY settingsChanged)
+    Q_PROPERTY(int suggestedStrength READ suggestedStrength NOTIFY settingsChanged)
+    Q_PROPERTY(int suggestedRelease READ suggestedRelease NOTIFY settingsChanged)
+    Q_PROPERTY(QStringList tunes READ tunes NOTIFY statusChanged)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY historyChanged)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY historyChanged)
 
@@ -78,6 +82,12 @@ public:
 
     QVariantMap settings() const { return m_settings.toJson().toVariantMap(); }
     QString preset() const { return m_settings.preset(); }
+    QString feel() const { return m_settings.feel(); }
+    // What suits the click pressure as it is set; the window offers these and
+    // never applies them by itself.
+    int suggestedStrength() const { return Settings::suggestedStrength(m_settings.value("press")); }
+    int suggestedRelease() const { return Settings::suggestedRelease(m_settings.value("press")); }
+    QStringList tunes() const;
     bool canUndo() const { return !m_undo.isEmpty(); }
     bool canRedo() const { return !m_redo.isEmpty(); }
 
@@ -113,6 +123,9 @@ public:
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void testClick(const QString &kind = "press");
+    // Sets the feedback strength to what suits the click pressure.
+    Q_INVOKABLE void matchFeedback();
+    Q_INVOKABLE void playTune(const QString &name);
     Q_INVOKABLE void retry();
     Q_INVOKABLE void startCalibration();
     Q_INVOKABLE void cancelCalibration();
