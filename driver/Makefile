@@ -1,10 +1,6 @@
 # Out-of-tree build of the patched hid-magicmouse. DKMS runs this for every
-# kernel; `make` by hand builds for the running one.
-ifneq ($(KERNELRELEASE),)
-obj-m := hid-magicmouse.o
-# See tactile-version.h for why the version comes in this way.
-ccflags-y += -include $(src)/tactile-version.h
-else
+# kernel; `make` by hand builds for the running one. What gets built is in
+# Kbuild.
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
 # linux-aurora is built with clang. Use it when it is installed, as the
@@ -28,4 +24,3 @@ clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) $(TOOLCHAIN) clean
 
 .PHONY: all check clean
-endif

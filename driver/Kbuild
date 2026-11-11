@@ -1,0 +1,7 @@
+# What the kernel's build system reads. It lives here rather than in the
+# Makefile because DKMS passes KERNELRELEASE on the command line, so that
+# variable cannot tell the two apart.
+obj-m := hid-magicmouse.o
+
+# See tactile-version.h for why the version comes in this way.
+ccflags-y += -include $(src)/tactile-version.h

@@ -29,7 +29,11 @@ done
 
 # 2. The kernel's own hid-magicmouse still has the click options the patch was
 #    written against, so the driver underneath has not been reworked.
-stock="$(ls "$MODDIR"/kernel/drivers/hid/hid-magicmouse.ko* 2>/dev/null | head -n 1 || true)"
+#    Once Tactile's driver is installed, DKMS keeps the kernel's own in its
+#    archive instead, and puts it back when Tactile is removed.
+stock="$(ls "$MODDIR"/kernel/drivers/hid/hid-magicmouse.ko* \
+	/var/lib/dkms/tactile/original_module/"$(basename -- "$MODDIR")"/*/hid-magicmouse.ko* \
+	2>/dev/null | head -n 1 || true)"
 [ -n "$stock" ] || refuse "this kernel has no hid-magicmouse of its own to replace"
 modinfo -F parm "$stock" | cut -d: -f1 | sort >"$HERE/.stock.params"
 if ! cmp -s "$HERE/.stock.params" "$HERE/abi/stock.params"; then

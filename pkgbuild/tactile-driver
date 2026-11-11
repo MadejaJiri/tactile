@@ -14,7 +14,11 @@ set -euo pipefail
 KERNEL="$(uname -r)"
 PARAMETERS=/sys/module/hid_magicmouse/parameters
 SPI=/sys/bus/spi/drivers/spi-hid-apple-of
-STOCK="$(ls "/lib/modules/$KERNEL/kernel/drivers/hid/"hid-magicmouse.ko* 2>/dev/null | head -n 1 || true)"
+# The kernel's own driver. While Tactile's is installed, DKMS keeps it in its
+# archive and puts it back when Tactile is removed.
+STOCK="$(ls "/lib/modules/$KERNEL/kernel/drivers/hid/"hid-magicmouse.ko* \
+	"/var/lib/dkms/tactile/original_module/$KERNEL"/*/hid-magicmouse.ko* \
+	2>/dev/null | head -n 1 || true)"
 
 installed() {
 	modinfo -k "$KERNEL" -F filename hid_magicmouse 2>/dev/null || true
